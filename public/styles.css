@@ -24,6 +24,11 @@ button{font-family:inherit;}
 .topbar-right{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
 .scan-meta{font-size:.76rem;color:var(--ink-soft);text-align:right;line-height:1.4;}
 .scan-meta .mono{color:var(--ink);}
+.user-chip{display:flex;align-items:center;gap:8px;font-size:.78rem;color:var(--ink-soft);padding:4px 10px 4px 4px;border:1px solid var(--ink);border-radius:999px;background:var(--surface);}
+.user-chip img{width:22px;height:22px;border-radius:50%;display:block;}
+.user-chip span{color:var(--ink);font-weight:600;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.btn-link{border:none;background:none;color:var(--teal);font-weight:600;font-size:.78rem;cursor:pointer;padding:0;text-decoration:underline;font-family:inherit;}
+.btn-link:hover{opacity:.8;}
 
 .btn{border:1px solid var(--ink);background:var(--surface);color:var(--ink);padding:9px 18px;border-radius:10px;font-size:.82rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:background .15s;}
 .btn:hover{background:var(--surface-2);}

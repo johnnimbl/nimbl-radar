@@ -73,18 +73,55 @@ This is a standard Node app, so any of these work:
 
 ## Protecting it
 
-Since this can hold candidate PII (tax IDs, birthdates, payment method), set
-`APP_USER` and `APP_PASSWORD` in `.env`/your host's environment variables to
-turn on a shared HTTP Basic Auth login for the whole app. It's a stopgap —
-if you outgrow "one shared password for the team," swap in real per-user
-auth (Supabase Auth is a natural fit since you're already on Supabase for
-the database).
+Since this can hold candidate PII (tax IDs, birthdates, payment method), the
+app is gated behind Google sign-in, restricted to one email domain
+(`GOOGLE_ALLOWED_DOMAIN`, e.g. `nimbl.ai`). Anyone signing in with a Google
+account on that domain gets in; everyone else is turned away before a
+session is created.
+
+**Set it up in Google Cloud Console** (console.cloud.google.com):
+
+1. Create a project (or use an existing one).
+2. **APIs & Services → OAuth consent screen** — set it up for "Internal" if
+   your Google Workspace is on `nimbl.ai` (simplest, restricts to your
+   workspace automatically), or "External" with your domain check still
+   enforced server-side either way.
+3. **APIs & Services → Credentials → Create Credentials → OAuth client ID**
+   → Application type **Web application**.
+4. Under **Authorized redirect URIs**, add:
+   `{PUBLIC_URL}/auth/google/callback` — e.g.
+   `https://nimbl-radar-app.onrender.com/auth/google/callback`.
+5. Copy the generated **Client ID** and **Client secret**.
+
+**Set these on your host** (see `.env.example`):
+
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — from step 5 above
+- `GOOGLE_ALLOWED_DOMAIN` — defaults to `nimbl.ai`
+- `PUBLIC_URL` — this app's public https URL, no trailing slash (must match
+  the redirect URI exactly)
+- `SESSION_SECRET` — a random string signing session cookies; generate one
+  with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+- `NODE_ENV=production` — makes session cookies HTTPS-only
+
+Leave `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` unset to skip the login gate
+entirely (useful for local development — the app is then open to anyone who
+can reach it, same as before).
+
+A legacy HTTP Basic Auth stopgap (`APP_USER`/`APP_PASSWORD`) still exists
+for local/dev use but is superseded by Google sign-in — leave both blank
+once Google login is configured.
+
+Sessions are held in memory on the server process, so everyone is signed
+out on a redeploy or restart — signing back in takes one click. If you
+outgrow "any @yourdomain.com Google account," swap in per-user roles
+(Supabase Auth is a natural fit since you're already on Supabase for the
+database).
 
 ## Project layout
 
 ```
-public/          static frontend — index.html, app.js, styles.css, logo
-server/          Express app (index.js), db pool (db.js), state read/write (state.js)
+public/          static frontend — index.html, app.js, styles.css, logo, login.html
+server/          Express app (index.js), db pool (db.js), state read/write (state.js), Google auth (auth.js)
 db/schema.sql    full table definitions
 db/seed-data.json the 9 starter leads
 scripts/         migrate.js and seed.js, run via npm run migrate / npm run seed
@@ -105,8 +142,9 @@ of replacing the whole document each time.
 
 ## What's not here yet
 
-- **Per-user accounts.** Right now it's one shared login for the whole team
-  (or none). Multi-user auth with roles is the natural next step.
+- **Per-user roles/permissions.** Google sign-in identifies who's who (any
+  `@nimbl.ai` account gets in), but everyone has the same full access today.
+  Role-based permissions (e.g. read-only vs. edit) are the natural next step.
 - **Gmail / calendar integration.** The original design intentionally kept
   outreach as "draft in chat, send from Gmail yourself" rather than the app
   sending email directly. Wiring up real Gmail/Google Calendar integration

@@ -16,6 +16,7 @@
   var expandedId = null;
   var pageSize = PAGE_SIZE_STEP;
   var readOnly = false;
+  var currentUser = null; // { email, name, photo } when Google sign-in is on; null otherwise
 
   function escapeHtml(s) {
     if (s === null || s === undefined) return "";
@@ -496,6 +497,12 @@
           '<div><h1>Radar</h1><div class="tag">Nearshore LATAM staffing · lead CRM</div></div>' +
         '</div>' +
         '<div class="topbar-right">' +
+          (currentUser ?
+            '<div class="user-chip" title="' + escapeHtml(currentUser.email) + '">' +
+              (currentUser.photo ? '<img src="' + escapeHtml(currentUser.photo) + '" alt="">' : '') +
+              '<span>' + escapeHtml(currentUser.name || currentUser.email) + '</span>' +
+              '<button class="btn-link" type="button" data-action="logout">Log out</button>' +
+            '</div>' : '') +
           '<div class="scan-meta">Last scanned<br><span class="mono">' + fmtDate(state.lastScanned) + '</span></div>' +
           '<button class="btn" type="button" data-action="refresh-scan">↻ Refresh</button>' +
           (readOnly ? "" : '<button class="btn btn-primary" type="button" data-action="open-add">+ Add lead</button>') +
@@ -843,6 +850,10 @@
     if (action === "add-role") { addRoleType(); return; }
     if (action === "remove-role") { removeRoleType(t.getAttribute("data-role")); return; }
     if (action === "refresh-scan") { refreshScan(); return; }
+    if (action === "logout") {
+      fetch("/auth/logout", { method: "POST" }).then(function () { window.location.href = "/auth/login"; });
+      return;
+    }
     if (action === "quick-add") { quickAdd(); return; }
     if (action === "open-add") {
       var p = document.getElementById("add-panel");
@@ -906,10 +917,19 @@
 
   function loadState() {
     document.getElementById("app").innerHTML = '<div class="empty">Loading Nimbl Radar…</div>';
-    fetch("/api/state").then(function (res) {
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      return res.json();
+    fetch("/auth/me").then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return null; }
+      return res.ok ? res.json() : { enabled: false };
+    }).then(function (who) {
+      if (!who) return; // redirecting to login
+      currentUser = who.user || null;
+      return fetch("/api/state").then(function (res) {
+        if (res.status === 401) { window.location.href = "/auth/login"; return null; }
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      });
     }).then(function (loaded) {
+      if (!loaded) return; // redirecting to login
       state = loaded;
       render();
     }).catch(function (err) {
