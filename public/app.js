@@ -8,12 +8,21 @@
   var ACTIVE_STATUSES = ["Contacted", "Replied", "Meeting Booked", "Proposal Sent"];
   var DEAD_STATUSES = ["Lost", "Not a Fit"];
   var CONTACT_ROLES = ["Admin", "Accounting", "HR", "Signatory", "Technical", "Billing"];
+  var CONTACT_STAGES = ["Not contacted", "Connection sent", "Connected", "Message sent", "Replied", "Meeting booked", "Not interested", "No response"];
+  var ACTIVITY_TYPES = ["LinkedIn connection", "LinkedIn message", "Email", "Call", "Meeting", "Note"];
+  // How far along a contact is. "Not interested" outranks everything so it is never auto-suggested away.
+  var STAGE_RANK = { "Not contacted": 0, "No response": 0, "Connection sent": 1, "Connected": 2, "Message sent": 3, "Replied": 4, "Meeting booked": 5, "Not interested": 99 };
+  // Company status a contact's stage pulls the lead up to (forward only).
+  var STAGE_TO_STATUS = { "Connection sent": "Contacted", "Connected": "Contacted", "Message sent": "Contacted", "Replied": "Replied", "Meeting booked": "Meeting Booked" };
+  var AUTO_ADVANCE_FROM = ["Not Started", "Researching", "Contacted", "Replied", "Meeting Booked"];
+  var FOLLOWUP_WINDOW_DAYS = 7;
   var CANDIDATE_STAGES = ["Identified", "Call booked", "Screen Approved", "Presented", "Interviewing", "Pre-Approved", "Placed", "Not Placed"];
   var PAGE_SIZE_STEP = 8;
 
   var state = { lastScanned: "", roleTypes: [], leads: [] };
   var filters = { roleType: "All", priority: "All", status: "All", q: "" };
   var expandedId = null;
+  var activityForm = null; // the open "Log activity" form, if any (kept outside the DOM so re-renders do not lose it)
   var pageSize = PAGE_SIZE_STEP;
   var readOnly = false;
   var currentUser = null; // { email, name, photo } when Google sign-in is on; null otherwise
@@ -34,12 +43,33 @@
     return months[m] + " " + parseInt(parts[2], 10) + ", " + parts[0];
   }
 
+  function pad2(n) { return n < 10 ? "0" + n : "" + n; }
+
+  // Today in the viewer's local calendar, as YYYY-MM-DD.
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+  }
+
+  function isIsoDate(iso) { return typeof iso === "string" && /^\d{4}-\d{2}-\d{2}$/.test(iso); }
+
+  function dayNum(iso) {
+    var p = iso.split("-");
+    return Math.round(Date.UTC(parseInt(p[0], 10), parseInt(p[1], 10) - 1, parseInt(p[2], 10)) / 86400000);
+  }
+
+  // a - b, in whole days
+  function diffDays(a, b) { return dayNum(a) - dayNum(b); }
+
+  function addDays(iso, n) {
+    var p = iso.split("-");
+    var d = new Date(Date.UTC(parseInt(p[0], 10), parseInt(p[1], 10) - 1, parseInt(p[2], 10) + n));
+    return d.getUTCFullYear() + "-" + pad2(d.getUTCMonth() + 1) + "-" + pad2(d.getUTCDate());
+  }
+
   function daysSince(iso) {
-    if (!iso) return null;
-    var posted = new Date(iso + "T00:00:00Z");
-    if (isNaN(posted.getTime())) return null;
-    var today = new Date("2026-08-31T00:00:00Z");
-    var diff = Math.round((today.getTime() - posted.getTime()) / 86400000);
+    if (!isIsoDate(iso)) return null;
+    var diff = diffDays(todayStr(), iso);
     return diff >= 0 ? diff : null;
   }
 
@@ -127,6 +157,90 @@
     return null;
   }
 
+  /* ---------------- CRM helpers ---------------- */
+
+  // Every scheduled follow-up on a live lead, soonest first.
+  function allFollowUps() {
+    var today = todayStr();
+    var out = [];
+    state.leads.forEach(function (l) {
+      if (DEAD_STATUSES.indexOf(l.status) !== -1) return;
+      (l.contacts || []).forEach(function (c) {
+        if (!isIsoDate(c.nextFollowUp) || c.stage === "Not interested") return;
+        out.push({ lead: l, contact: c, days: diffDays(c.nextFollowUp, today) });
+      });
+    });
+    out.sort(function (a, b) {
+      if (a.days !== b.days) return a.days - b.days;
+      return a.lead.company.localeCompare(b.lead.company);
+    });
+    return out;
+  }
+
+  function dueNowCount() {
+    return allFollowUps().filter(function (f) { return f.days <= 0; }).length;
+  }
+
+  function leadDueCount(l) {
+    var today = todayStr();
+    if (DEAD_STATUSES.indexOf(l.status) !== -1) return 0;
+    return (l.contacts || []).filter(function (c) {
+      return isIsoDate(c.nextFollowUp) && c.stage !== "Not interested" && diffDays(c.nextFollowUp, today) <= 0;
+    }).length;
+  }
+
+  function notContactedCount() {
+    var n = 0;
+    state.leads.forEach(function (l) {
+      if (DEAD_STATUSES.indexOf(l.status) !== -1) return;
+      (l.contacts || []).forEach(function (c) { if (!c.stage || c.stage === "Not contacted") n++; });
+    });
+    return n;
+  }
+
+  function dueLabel(days) {
+    if (days < 0) return "Overdue " + (-days) + "d";
+    if (days === 0) return "Due today";
+    if (days === 1) return "Tomorrow";
+    return "In " + days + "d";
+  }
+
+  function dueClass(days) {
+    return days < 0 ? "due-overdue" : days === 0 ? "due-today" : "due-soon";
+  }
+
+  // Which stage would logging this touch move the contact to? "" = leave as is (never moves backward).
+  function suggestStage(type, direction, current) {
+    var s = "";
+    if (type === "LinkedIn connection") s = direction === "Inbound" ? "Connected" : "Connection sent";
+    else if (type === "LinkedIn message" || type === "Email" || type === "Call") s = direction === "Inbound" ? "Replied" : "Message sent";
+    else if (type === "Meeting") s = "Meeting booked";
+    if (!s) return "";
+    var cur = STAGE_RANK[current];
+    if (cur === undefined) cur = 0;
+    return STAGE_RANK[s] > cur ? s : "";
+  }
+
+  // Pull the company's status forward when a contact progresses. Never moves backward and never
+  // touches Proposal Sent / Won / Lost / Not a Fit.
+  function autoAdvanceLead(l, stage) {
+    var target = STAGE_TO_STATUS[stage];
+    if (!target) return;
+    if (AUTO_ADVANCE_FROM.indexOf(l.status) === -1) return;
+    if (STATUSES.indexOf(target) > STATUSES.indexOf(l.status)) {
+      l.status = target;
+      toast(l.company + " moved to " + target + ".");
+    }
+  }
+
+  function latestTouchDate(c) {
+    var best = "";
+    (c.activities || []).forEach(function (a) {
+      if (a.type !== "Note" && a.date && a.date > best) best = a.date;
+    });
+    return best;
+  }
+
   function findCandidate(l, cid) {
     if (!l || !l.candidates) return null;
     for (var i = 0; i < l.candidates.length; i++) if (l.candidates[i].id === cid) return l.candidates[i];
@@ -155,6 +269,7 @@
         '<div class="stat' + (nn > 0 ? " stat-highlight" : "") + '"><div class="num mono">' + nn + '</div><div class="lbl">New roles found</div></div>' +
         '<div class="stat"><div class="num mono">' + highPriorityCount() + '</div><div class="lbl">High priority</div></div>' +
         '<div class="stat"><div class="num mono">' + activeOutreachCount() + '</div><div class="lbl">In active outreach</div></div>' +
+        '<div class="stat' + (dueNowCount() > 0 ? " stat-highlight" : "") + '"><div class="num mono">' + dueNowCount() + '</div><div class="lbl">Follow-ups due</div></div>' +
       '</div>';
   }
 
@@ -192,6 +307,31 @@
       '</div>';
   }
 
+  function renderFollowUps() {
+    var all = allFollowUps().filter(function (f) { return f.days <= FOLLOWUP_WINDOW_DAYS; });
+    var shown = all.slice(0, 8);
+    var body;
+    if (shown.length) {
+      body = shown.map(function (f) {
+        var c = f.contact;
+        var who = c.name || "(unnamed contact)";
+        return '' +
+          '<div class="fu-card ' + dueClass(f.days) + '" data-action="goto-lead" data-id="' + f.lead.id + '">' +
+            '<span class="due-badge ' + dueClass(f.days) + '">' + dueLabel(f.days) + '</span>' +
+            '<div class="pc-main"><div class="nm">' + escapeHtml(who) + ' <span class="fu-co">· ' + escapeHtml(f.lead.company) + '</span></div>' +
+            '<div class="rt">' + escapeHtml(c.title || "") + (c.title ? " · " : "") + escapeHtml(c.stage || "Not contacted") + ' · follow up ' + fmtDate(c.nextFollowUp) + '</div></div>' +
+            (readOnly ? "" : '<button class="btn btn-sm" type="button" data-action="followup-log" data-id="' + f.lead.id + '" data-cid="' + c.id + '">Log activity</button>') +
+          '</div>';
+      }).join("");
+      if (all.length > shown.length) body += '<div class="help">+ ' + (all.length - shown.length) + ' more in the next ' + FOLLOWUP_WINDOW_DAYS + ' days — open a company to see them.</div>';
+    } else {
+      var nc = notContactedCount();
+      body = '<div class="priority-empty">Nothing due in the next ' + FOLLOWUP_WINDOW_DAYS + ' days. Log an activity on a contact and set a next follow-up date to see it here.' +
+        (nc > 0 ? ' ' + nc + ' saved contact' + (nc === 1 ? " hasn't" : "s haven't") + ' been contacted yet.' : '') + '</div>';
+    }
+    return '<div class="priorities followups"><h3>Follow-ups due</h3><div class="priority-list">' + body + '</div></div>';
+  }
+
   function renderPriorities() {
     var items = priorityLeads();
     var body = items.length ? items.map(function (l) {
@@ -224,18 +364,96 @@
       '</div>';
   }
 
+  function dueBadgeFor(c) {
+    if (!isIsoDate(c.nextFollowUp) || c.stage === "Not interested") return "";
+    var days = diffDays(c.nextFollowUp, todayStr());
+    if (days > FOLLOWUP_WINDOW_DAYS) return "";
+    return '<span class="due-badge ' + dueClass(days) + '">' + dueLabel(days) + '</span>';
+  }
+
+  function renderActivity(l, c, a) {
+    var inbound = a.direction === "Inbound";
+    return '' +
+      '<div class="activity">' +
+        '<div class="act-top">' +
+          '<span class="act-type">' + escapeHtml(a.type) + '</span>' +
+          (a.type === "Note" ? "" : '<span class="act-dir ' + (inbound ? "act-in" : "act-out") + '">' + (inbound ? "↙ In" : "↗ Out") + '</span>') +
+          '<span class="act-date">' + fmtDate(a.date) + '</span>' +
+          (readOnly ? "" : '<button type="button" class="act-del" data-action="remove-activity" data-id="' + l.id + '" data-cid="' + c.id + '" data-aid="' + escapeHtml(a.id) + '" aria-label="Delete activity">✕</button>') +
+        '</div>' +
+        (a.summary ? '<div class="act-sum">' + escapeHtml(a.summary) + '</div>' : '') +
+      '</div>';
+  }
+
+  function renderActivityForm(l, c) {
+    var f = activityForm;
+    function af(field) { return 'data-action="af-field" data-field="' + field + '"'; }
+    var typeOpts = ACTIVITY_TYPES.map(function (t) { return '<option value="' + t + '"' + (f.type === t ? " selected" : "") + '>' + t + '</option>'; }).join("");
+    var dirOpts = ["Outbound", "Inbound"].map(function (t) { return '<option value="' + t + '"' + (f.direction === t ? " selected" : "") + '>' + t + '</option>'; }).join("");
+    var stageOpts = '<option value=""' + (!f.moveStage ? " selected" : "") + '>Keep: ' + escapeHtml(c.stage || "Not contacted") + '</option>' +
+      CONTACT_STAGES.filter(function (s) { return s !== (c.stage || "Not contacted"); }).map(function (s) {
+        return '<option value="' + s + '"' + (f.moveStage === s ? " selected" : "") + '>' + s + '</option>';
+      }).join("");
+    return '' +
+      '<div class="activity-form">' +
+        '<div class="af-grid">' +
+          '<div><label>What happened</label><select ' + af("type") + '>' + typeOpts + '</select></div>' +
+          '<div><label>Direction</label><select ' + af("direction") + '>' + dirOpts + '</select></div>' +
+          '<div><label>Date</label><input type="date" value="' + escapeHtml(f.date) + '" ' + af("date") + '></div>' +
+        '</div>' +
+        '<div><label>Summary</label><textarea placeholder="e.g. Sent connection request with the nearshore intro note" ' + af("summary") + '>' + escapeHtml(f.summary) + '</textarea></div>' +
+        '<div class="af-grid af-grid-2">' +
+          '<div><label>Move contact to stage</label><select ' + af("moveStage") + '>' + stageOpts + '</select></div>' +
+          '<div><label>Next follow-up</label><input type="date" value="' + escapeHtml(f.followUp) + '" ' + af("followUp") + '></div>' +
+        '</div>' +
+        '<div class="af-quick"><span>Follow up in</span>' +
+          '<button type="button" class="chip" data-action="af-followup-quick" data-days="3">3 days</button>' +
+          '<button type="button" class="chip" data-action="af-followup-quick" data-days="7">1 week</button>' +
+          '<button type="button" class="chip" data-action="af-followup-quick" data-days="14">2 weeks</button>' +
+          '<button type="button" class="chip" data-action="af-followup-quick" data-days="">No follow-up</button>' +
+        '</div>' +
+        '<div class="row-actions">' +
+          '<button type="button" class="btn btn-sm" data-action="cancel-activity">Cancel</button>' +
+          '<button type="button" class="btn btn-sm btn-primary" data-action="submit-activity" data-id="' + l.id + '" data-cid="' + c.id + '">Save activity</button>' +
+        '</div>' +
+      '</div>';
+  }
+
   function renderContactCard(l, c) {
     var d = readOnly ? " disabled" : "";
+    var stage = c.stage || "Not contacted";
     var rolesPills = CONTACT_ROLES.map(function (r) {
       var active = c.roles && c.roles.indexOf(r) !== -1;
       return '<button type="button" class="role-pill' + (active ? ' active' : '') + '" data-action="toggle-contact-role" data-id="' + l.id + '" data-cid="' + c.id + '" data-role="' + r + '"' + d + '>' + r + '</button>';
     }).join("");
+    var formOpen = activityForm && activityForm.leadId === l.id && activityForm.cid === c.id;
+    var acts = (c.activities || []).map(function (a, i) { return { a: a, i: i }; }).sort(function (x, y) {
+      var dc = (y.a.date || "").localeCompare(x.a.date || "");
+      return dc !== 0 ? dc : y.i - x.i;
+    });
+    var timeline = acts.length
+      ? '<div class="activity-list">' + acts.map(function (x) { return renderActivity(l, c, x.a); }).join("") + '</div>'
+      : '<div class="act-empty">No activity logged yet.</div>';
+    var linkedinOk = /^https?:\/\//.test(c.linkedin || "");
     return '' +
       '<div class="contact-card">' +
         '<div class="contact-head">' +
           '<div class="avatar">' + escapeHtml(initialsOf(c.name)) + '</div>' +
           '<div class="ct-name-wrap"><input class="ct-name-input" type="text" value="' + escapeHtml(c.name) + '" placeholder="Contact name" data-action="edit-contact" data-field="name" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
+          '<select class="mini ct-stage" data-action="set-contact-stage" data-id="' + l.id + '" data-cid="' + c.id + '" aria-label="Outreach stage"' + d + '>' +
+            CONTACT_STAGES.map(function (s) { return '<option value="' + s + '"' + (stage === s ? " selected" : "") + '>' + s + '</option>'; }).join("") +
+          '</select>' +
           (readOnly ? "" : '<button class="btn btn-ghost btn-sm" type="button" data-action="remove-contact" data-id="' + l.id + '" data-cid="' + c.id + '" aria-label="Remove contact">✕</button>') +
+        '</div>' +
+        '<div class="ct-crm">' +
+          '<div class="ct-meta">' +
+            '<span>Last contacted: <strong>' + (c.lastContacted ? fmtDate(c.lastContacted) : "never") + '</strong></span>' +
+            '<label>Next follow-up <input type="date" value="' + escapeHtml(c.nextFollowUp || "") + '" data-action="set-followup" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></label>' +
+            dueBadgeFor(c) +
+            (linkedinOk ? '<a href="' + escapeHtml(c.linkedin) + '" target="_blank" rel="noopener">LinkedIn ↗</a>' : '') +
+          '</div>' +
+          (formOpen ? renderActivityForm(l, c) : (readOnly ? "" : '<div><button class="btn btn-sm" type="button" data-action="open-activity-form" data-id="' + l.id + '" data-cid="' + c.id + '">+ Log activity</button></div>')) +
+          timeline +
         '</div>' +
         '<div class="field-row">' +
           '<div><label>Title</label><input type="text" value="' + escapeHtml(c.title) + '" data-action="edit-contact" data-field="title" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
@@ -415,7 +633,7 @@
           '</div>' +
           renderContactsPanel(l) +
           (isWon ? renderClientInfoPanel(l) : "") +
-          '<h4>Communication log</h4>' +
+          '<h4>Company notes</h4>' +
           '<div class="notes-list">' + notesHtml + '</div>' +
           (readOnly ? "" : '<div class="add-note"><textarea id="note-input-' + l.id + '" placeholder="Log a call, reply, or reminder…"></textarea><button class="btn btn-sm btn-primary" type="button" data-action="add-note" data-id="' + l.id + '">Add</button></div>') +
         '</div>' +
@@ -430,7 +648,7 @@
     var rows = '' +
       '<tr class="lead-row" data-expanded="' + expanded + '" data-action="toggle-row" data-id="' + l.id + '">' +
         '<td>' + (l.isNew ? '<span class="newtag">NEW</span>' : '<svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>') + '</td>' +
-        '<td><div class="company-cell"><div><div class="nm">' + escapeHtml(l.company) + (l.status === "Won" ? '<span class="client-badge">Client</span>' : '') + '</div><span class="role-tag">' + escapeHtml(l.jobTitle) + '</span></div></div></td>' +
+        '<td><div class="company-cell"><div><div class="nm">' + escapeHtml(l.company) + (l.status === "Won" ? '<span class="client-badge">Client</span>' : '') + (leadDueCount(l) > 0 ? '<span class="due-badge due-today" style="margin-left:6px">Follow-up due</span>' : '') + '</div><span class="role-tag">' + escapeHtml(l.jobTitle) + '</span></div></div></td>' +
         '<td>' + escapeHtml(l.roleType) + '</td>' +
         '<td><span class="pill ' + priorityClass(l.priority) + '">' + l.priority + '</span></td>' +
         '<td class="mono">' + escapeHtml(l.estSize) + '</td>' +
@@ -511,6 +729,7 @@
       (readOnly ? '<div class="readonly-note">This view is read-only — open the artifact in claude.ai as its owner to edit statuses, notes, and contacts.</div>' : '') +
       renderNewBanner() +
       renderStats() +
+      renderFollowUps() +
       renderCaptureBar() +
       renderPriorities() +
       renderAddForm() +
@@ -572,7 +791,7 @@
   function addContact(id) {
     var l = findLead(id);
     if (!l) return;
-    l.contacts.push({ id: "c" + Date.now().toString(36), name: "", title: "", email: "", phone: "", linkedin: "", roles: [] });
+    l.contacts.push({ id: "c" + Date.now().toString(36), name: "", title: "", email: "", phone: "", linkedin: "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", activities: [] });
     persist();
   }
 
@@ -590,6 +809,80 @@
     if (!c.roles) c.roles = [];
     var idx = c.roles.indexOf(role);
     if (idx === -1) c.roles.push(role); else c.roles.splice(idx, 1);
+    persist();
+  }
+
+  /* ---- CRM actions ---- */
+
+  function defaultFollowUp(f, c) {
+    var outboundTouch = f.direction === "Outbound" && f.type !== "Note" && f.type !== "Meeting";
+    if (outboundTouch) return addDays(todayStr(), 3);
+    return c.nextFollowUp || "";
+  }
+
+  function applyFormDefaults(c) {
+    var f = activityForm;
+    if (!f.stageTouched) f.moveStage = suggestStage(f.type, f.direction, c.stage || "Not contacted");
+    if (!f.followTouched) f.followUp = defaultFollowUp(f, c);
+  }
+
+  function openActivityForm(id, cid) {
+    var l = findLead(id);
+    var c = findContact(l, cid);
+    if (!c) return;
+    var stage = c.stage || "Not contacted";
+    activityForm = {
+      leadId: id, cid: cid,
+      type: stage === "Not contacted" ? "LinkedIn connection" : "LinkedIn message",
+      direction: "Outbound", date: todayStr(), summary: "", moveStage: "", followUp: "",
+      stageTouched: false, followTouched: false
+    };
+    applyFormDefaults(c);
+  }
+
+  function submitActivity(id, cid) {
+    var f = activityForm;
+    var l = findLead(id);
+    var c = findContact(l, cid);
+    if (!f || !c) return;
+    if (!c.activities) c.activities = [];
+    var date = isIsoDate(f.date) ? f.date : todayStr();
+    c.activities.push({
+      id: "a" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      type: f.type, direction: f.direction, date: date, summary: (f.summary || "").trim()
+    });
+    c.lastContacted = latestTouchDate(c);
+    if (f.moveStage) c.stage = f.moveStage;
+    c.nextFollowUp = isIsoDate(f.followUp) ? f.followUp : "";
+    if (c.stage === "Not interested") c.nextFollowUp = "";
+    activityForm = null;
+    autoAdvanceLead(l, c.stage);
+    persist();
+  }
+
+  function removeActivity(id, cid, aid) {
+    var l = findLead(id);
+    var c = findContact(l, cid);
+    if (!c) return;
+    c.activities = (c.activities || []).filter(function (a) { return a.id !== aid; });
+    c.lastContacted = latestTouchDate(c);
+    persist();
+  }
+
+  function setContactStage(id, cid, stage) {
+    var l = findLead(id);
+    var c = findContact(l, cid);
+    if (!c) return;
+    c.stage = stage;
+    if (stage === "Not interested") c.nextFollowUp = "";
+    autoAdvanceLead(l, stage);
+    persist();
+  }
+
+  function setFollowUp(id, cid, value) {
+    var c = findContact(findLead(id), cid);
+    if (!c) return;
+    c.nextFollowUp = isIsoDate(value) ? value : "";
     persist();
   }
 
@@ -821,6 +1114,7 @@
 
     if (action === "toggle-row") {
       expandedId = expandedId === id ? null : id;
+      activityForm = null;
       if (expandedId && findLead(id) && findLead(id).isNew) markSeen(id);
       else render();
       return;
@@ -838,6 +1132,20 @@
     if (action === "add-note") { addNote(id); return; }
     if (action === "add-contact") { addContact(id); return; }
     if (action === "remove-contact") { removeContact(id, cid); return; }
+    if (action === "open-activity-form") { openActivityForm(id, cid); render(); return; }
+    if (action === "cancel-activity") { activityForm = null; render(); return; }
+    if (action === "submit-activity") { submitActivity(id, cid); return; }
+    if (action === "remove-activity") { removeActivity(id, cid, t.getAttribute("data-aid")); return; }
+    if (action === "af-followup-quick") {
+      if (activityForm) {
+        var n = t.getAttribute("data-days");
+        activityForm.followUp = n ? addDays(todayStr(), parseInt(n, 10)) : "";
+        activityForm.followTouched = true;
+        render();
+      }
+      return;
+    }
+    if (action === "followup-log") { openActivityForm(id, cid); gotoLead(id); return; }
     if (action === "toggle-contact-role") { toggleContactRole(id, cid, t.getAttribute("data-role")); return; }
     if (action === "save-client-info") { saveClientInfo(id); return; }
     if (action === "add-document") { addDocument(id); return; }
@@ -876,6 +1184,19 @@
     var cid = t.getAttribute("data-cid");
     if (action === "set-status") { setStatus(id, t.value); return; }
     if (action === "set-priority") { setPriority(id, t.value); return; }
+    if (action === "set-contact-stage") { setContactStage(id, cid, t.value); return; }
+    if (action === "set-followup") { setFollowUp(id, cid, t.value); return; }
+    if (action === "af-field") {
+      var f = activityForm;
+      if (!f) return;
+      var field = t.getAttribute("data-field");
+      f[field] = t.value;
+      var fc = findContact(findLead(f.leadId), f.cid);
+      if (field === "moveStage") { f.stageTouched = true; return; }
+      if (field === "followUp") { f.followTouched = true; return; }
+      if ((field === "type" || field === "direction") && fc) { applyFormDefaults(fc); render(); }
+      return;
+    }
     if (action === "filter-status") { filters.status = t.value; pageSize = PAGE_SIZE_STEP; render(); return; }
     if (action === "edit-contact") {
       var l = findLead(id);
@@ -898,6 +1219,10 @@
   });
 
   document.getElementById("app").addEventListener("input", function (e) {
+    if (e.target.getAttribute("data-action") === "af-field" && activityForm) {
+      activityForm[e.target.getAttribute("data-field")] = e.target.value;
+      return;
+    }
     if (e.target.getAttribute("data-action") === "search") {
       filters.q = e.target.value;
       pageSize = PAGE_SIZE_STEP;

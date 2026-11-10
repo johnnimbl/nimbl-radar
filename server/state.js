@@ -3,9 +3,13 @@
 // "one document" model the original Claude Artifact prototype used, just
 // backed by real Postgres tables instead of an in-page blob — see the
 // schema in db/schema.sql. Every save replaces each lead's child rows
-// (notes/contacts/documents/candidates) wholesale; simple and correct for a
+// (notes/contacts/contact activities/documents/candidates) wholesale; simple and correct for a
 // CRM at this scale. If you outgrow that (heavy concurrent editing, a lot
 // of leads), split this into per-resource endpoints instead.
+
+const CONTACT_STAGES = ["Not contacted", "Connection sent", "Connected", "Message sent", "Replied", "Meeting booked", "Not interested", "No response"];
+const ACTIVITY_TYPES = ["LinkedIn connection", "LinkedIn message", "Email", "Call", "Meeting", "Note"];
+const ACTIVITY_DIRECTIONS = ["Outbound", "Inbound"];
 
 function emptyClientInfo() {
   return { address: "", phone: "", taxId: "", currency: "USD" };
@@ -39,6 +43,9 @@ async function getState(pool) {
   const contactsRes = leadIds.length
     ? await pool.query("select * from contacts where lead_id = any($1) order by sort_order, id", [leadIds])
     : { rows: [] };
+  const activitiesRes = leadIds.length
+    ? await pool.query("select * from activities where lead_id = any($1) order by activity_date, sort_order, id", [leadIds])
+    : { rows: [] };
   const docsRes = leadIds.length
     ? await pool.query("select * from documents where lead_id = any($1) order by sort_order, id", [leadIds])
     : { rows: [] };
@@ -55,6 +62,7 @@ async function getState(pool) {
 
   const notesByLead = groupBy(notesRes.rows, "lead_id");
   const contactsByLead = groupBy(contactsRes.rows, "lead_id");
+  const activitiesByContact = groupBy(activitiesRes.rows, "contact_id");
   const docsByLead = groupBy(docsRes.rows, "lead_id");
   const candsByLead = groupBy(candsRes.rows, "lead_id");
   const candNotesByCand = groupBy(candNotesRes.rows, "candidate_id");
@@ -82,6 +90,12 @@ async function getState(pool) {
     contacts: (contactsByLead[l.id] || []).map((c) => ({
       id: c.id, name: c.name || "", title: c.title || "", email: c.email || "",
       phone: c.phone || "", linkedin: c.linkedin || "", roles: c.roles || [],
+      stage: c.stage || "Not contacted",
+      nextFollowUp: dateOrEmpty(c.next_follow_up),
+      lastContacted: dateOrEmpty(c.last_contacted),
+      activities: (activitiesByContact[c.id] || []).map((a) => ({
+        id: a.id, type: a.type, direction: a.direction, date: dateOrEmpty(a.activity_date), summary: a.summary || "",
+      })),
     })),
     documents: (docsByLead[l.id] || []).map((d) => ({ id: d.id, name: d.name || "" })),
     candidates: (candsByLead[l.id] || []).map((c) => ({
@@ -161,14 +175,34 @@ async function putState(pool, state) {
         ]);
       }
 
+      await client.query("delete from activities where lead_id = $1", [l.id]);
       await client.query("delete from contacts where lead_id = $1", [l.id]);
       const contacts = Array.isArray(l.contacts) ? l.contacts : [];
+      const today = new Date().toISOString().slice(0, 10);
       for (let i = 0; i < contacts.length; i++) {
         const c = contacts[i];
         await client.query(
-          "insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-          [c.id, l.id, c.name || "", c.title || "", c.email || "", c.phone || "", c.linkedin || "", c.roles || [], i]
+          `insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order, stage, next_follow_up, last_contacted)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          [
+            c.id, l.id, c.name || "", c.title || "", c.email || "", c.phone || "", c.linkedin || "", c.roles || [], i,
+            CONTACT_STAGES.includes(c.stage) ? c.stage : "Not contacted",
+            dateOrNull(c.nextFollowUp), dateOrNull(c.lastContacted),
+          ]
         );
+        const acts = Array.isArray(c.activities) ? c.activities : [];
+        for (let j = 0; j < acts.length; j++) {
+          const a = acts[j];
+          await client.query(
+            "insert into activities (id, lead_id, contact_id, type, direction, activity_date, summary, sort_order) values ($1,$2,$3,$4,$5,$6,$7,$8)",
+            [
+              a.id, l.id, c.id,
+              ACTIVITY_TYPES.includes(a.type) ? a.type : "Note",
+              ACTIVITY_DIRECTIONS.includes(a.direction) ? a.direction : "Outbound",
+              dateOrNull(a.date) || today, a.summary || "", j,
+            ]
+          );
+        }
       }
 
       await client.query("delete from documents where lead_id = $1", [l.id]);

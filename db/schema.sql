@@ -63,6 +63,33 @@ create table if not exists contacts (
 );
 create index if not exists contacts_lead_id_idx on contacts(lead_id);
 
+-- CRM tracking on contacts (safe to re-run on an existing database).
+-- stage: where this person is in your outreach; next_follow_up drives the
+-- dashboard's "Follow-ups due" list; last_contacted is stamped when you log an activity.
+alter table contacts add column if not exists stage text not null default 'Not contacted'
+  check (stage in ('Not contacted','Connection sent','Connected','Message sent','Replied','Meeting booked','Not interested','No response'));
+alter table contacts add column if not exists next_follow_up date;
+alter table contacts add column if not exists last_contacted date;
+
+-- One row per touch with a contact (LinkedIn request/message, email, call, meeting).
+-- contact_id is deliberately NOT a foreign key: every save rewrites a lead's
+-- contacts rows (see server/state.js), which would cascade-delete the history.
+-- The app removes a contact's activities itself when the contact is removed.
+create table if not exists activities (
+  id text primary key,
+  lead_id text not null references leads(id) on delete cascade,
+  contact_id text not null,
+  type text not null default 'Note'
+    check (type in ('LinkedIn connection','LinkedIn message','Email','Call','Meeting','Note')),
+  direction text not null default 'Outbound'
+    check (direction in ('Outbound','Inbound')),
+  activity_date date not null default current_date,
+  summary text not null default '',
+  sort_order integer not null default 0
+);
+create index if not exists activities_lead_id_idx on activities(lead_id);
+create index if not exists activities_contact_id_idx on activities(contact_id);
+
 create table if not exists documents (
   id text primary key,
   lead_id text not null references leads(id) on delete cascade,
