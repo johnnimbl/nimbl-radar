@@ -18,6 +18,20 @@
   var FOLLOWUP_WINDOW_DAYS = 7;
   // Days until the next nudge once a contact reaches this stage. Edit these to change your rhythm.
   var CADENCE_DAYS = { "Connection sent": 4, "Connected": 2, "Message sent": 5, "Replied": 2, "No response": 14 };
+  // The outreach plan every contact follows. "wait" = days after the previous touch (touch 2 counts from
+  // the day they accept your connection request). Edit the text or timing here to change the plan.
+  var SEQUENCE = [
+    { n: 1, name: "Connection request", type: "LinkedIn connection", wait: 0, tip: "Send a LinkedIn connection request with a short note that mentions the role they are hiring for." },
+    { n: 2, name: "First message", type: "LinkedIn message", wait: 2, tip: "Once they accept, name the open role you saw and offer 2–3 anonymized LATAM profiles." },
+    { n: 3, name: "Email follow-up", type: "Email", altType: "LinkedIn message", wait: 5, tip: "Short email repeating the offer. No email on file? Send a second LinkedIn message instead." },
+    { n: 4, name: "Value add", type: "LinkedIn message", wait: 5, tip: "Share something useful: a relevant profile, a rate comparison or a hiring tip. No hard ask." },
+    { n: 5, name: "Last note", type: "LinkedIn message", wait: 6, tip: "Close the loop: ask if they are the right person (or who is), then stop." }
+  ];
+  var SEQUENCE_DONE_WAIT = 7; // days after touch 5 before you are nudged to close the contact out
+  // If the contact is already past a stage, the earlier touches are counted as done.
+  var STAGE_MIN_STEP = { "Connection sent": 1, "Connected": 1, "Message sent": 2 };
+  var QUIET_DAYS = 7;            // days without a reply before the app suggests a second person at the company
+  var DAILY_NEW_OUTREACH = 10;   // suggested cap for new LinkedIn connection requests per day
   var BOARD_STAGES = ["Not contacted", "Connection sent", "Connected", "Message sent", "Replied", "Meeting booked", "No response", "Not interested"];
   var CANDIDATE_STAGES = ["Identified", "Call booked", "Screen Approved", "Presented", "Interviewing", "Pre-Approved", "Placed", "Not Placed"];
   var PAGE_SIZE_STEP = 8;
@@ -259,6 +273,179 @@
     return counts;
   }
 
+  /* ---- outreach sequence ---- */
+
+  function seqStep(c) {
+    var n = parseInt(c.sequenceStep, 10);
+    if (isNaN(n)) n = 0;
+    n = Math.max(n, STAGE_MIN_STEP[c.stage] || 0); // contacts reached before this feature count as already started
+    return Math.min(SEQUENCE.length, Math.max(0, n));
+  }
+
+  // Replies and meetings pause the plan; it also ends when all five touches are done.
+  function seqPaused(c) {
+    var st = c.stage || "Not contacted";
+    return st === "Replied" || st === "Meeting booked" || st === "Not interested";
+  }
+
+  function seqDone(c) { return seqStep(c) >= SEQUENCE.length || (c.stage || "") === "No response"; }
+
+  function nextTouch(c) {
+    if (seqPaused(c) || seqDone(c)) return null;
+    return SEQUENCE[seqStep(c)];
+  }
+
+  // The channel to use for a touch (touch 3 falls back to LinkedIn when there is no email).
+  function touchType(c, t) {
+    return t.altType && !(c.email || "").trim() ? t.altType : t.type;
+  }
+
+  function touchShort(c, t) {
+    return "Touch " + t.n + " · " + t.name + " (" + (touchType(c, t) === "Email" ? "email" : "LinkedIn") + ")";
+  }
+
+  function seqStageFloor(c, stage) {
+    var m = STAGE_MIN_STEP[stage || c.stage] || 0;
+    return Math.max(seqStep(c), m);
+  }
+
+  // Days until the next touch, given where the contact will be after this change.
+  function sequenceFollowUp(c, stage, step, baseIso) {
+    if (stage === "Not interested") return "";
+    if (stage === "Replied" || stage === "No response") return cadenceFollowUp(stage, baseIso);
+    if (stage === "Meeting booked") return "";
+    if (step <= 0) return "";
+    if (step >= SEQUENCE.length) return addDays(baseIso, SEQUENCE_DONE_WAIT);
+    var t = SEQUENCE[step];
+    var wait = t.wait;
+    if (t.n === 2) wait = stage === "Connected" ? 2 : 4; // 4 days to see whether they accepted
+    return addDays(baseIso, wait);
+  }
+
+  function renderSequenceBlock(l, c) {
+    var step = seqStep(c);
+    var dots = SEQUENCE.map(function (t, i) {
+      var cls = i < step ? "seq-dot done" : (i === step && !seqPaused(c) && !seqDone(c) ? "seq-dot now" : "seq-dot");
+      return '<span class="' + cls + '" title="Touch ' + t.n + ': ' + escapeHtml(t.name) + '"></span>';
+    }).join("");
+    var head, body = "";
+    var nt = nextTouch(c);
+    if (seqPaused(c)) {
+      head = (c.stage === "Not interested" ? "Sequence stopped" : "Sequence paused") + " · " + escapeHtml(c.stage);
+      body = c.stage === "Not interested" ? "No more messages needed." : "They replied, so the automatic plan is on hold. Handle this one by hand.";
+    } else if (seqDone(c)) {
+      head = "Sequence complete · " + step + " of " + SEQUENCE.length + " touches";
+      body = (c.stage === "No response" ? "Marked as no response." : "No reply after all five touches? Mark them No response and move to someone else at the company.");
+    } else {
+      head = "Touch " + nt.n + " of " + SEQUENCE.length + " · " + escapeHtml(nt.name);
+      body = nt.tip;
+      if (nt.n === 2 && (c.stage || "") === "Connection sent") body = "Waiting for them to accept. Set the stage to Connected when they do, or skip ahead if they never accept. " + nt.tip;
+      if (nt.n === 3 && touchType(c, nt) !== nt.type) body = "No email on file, so send this as a second LinkedIn message. " + nt.tip;
+    }
+    var controls = "";
+    if (!readOnly) {
+      controls = '<div class="seq-controls">' +
+        (nt ? '<button type="button" class="btn btn-sm" data-action="skip-touch" data-id="' + l.id + '" data-cid="' + c.id + '">Skip this touch</button>' : '') +
+        '<label class="seq-set">Touches done <select class="mini" data-action="set-seq-step" data-id="' + l.id + '" data-cid="' + c.id + '">' +
+          [0, 1, 2, 3, 4, 5].map(function (n) { return '<option value="' + n + '"' + (n === step ? " selected" : "") + '>' + n + '</option>'; }).join("") +
+        '</select></label>' +
+      '</div>';
+    }
+    return '<div class="seq"><div class="seq-top"><span class="seq-dots" aria-hidden="true">' + dots + '</span><strong>' + head + '</strong></div>' +
+      '<div class="seq-tip">' + escapeHtml(body) + '</div>' + controls + '</div>';
+  }
+
+  /* ---- who to contact first ---- */
+
+  // How likely this title is the right first call for a tech hire at a smaller company.
+  function titleScore(title) {
+    var t = (title || "").toLowerCase().trim();
+    if (!t) return 0;
+    if (/\b(cto|vp|vice president|head of|director|chief|engineering manager|eng manager|founder|co-?founder|ceo|owner|president)\b/.test(t) && !/recruit|talent|hr\b|people|human/.test(t)) return 3;
+    if (/recruit|talent|people|human resources|\bhr\b|coo|operations|hiring/.test(t)) return 2;
+    return 1;
+  }
+
+  function suggestedFirst(l) {
+    var best = null, bestScore = -1;
+    (l.contacts || []).forEach(function (c) {
+      var sc = titleScore(c.title);
+      if (sc > bestScore) { best = c; bestScore = sc; }
+    });
+    return best;
+  }
+
+  // The first contact: the one you flagged, otherwise the best fit by title.
+  function firstContact(l) {
+    var flagged = (l.contacts || []).filter(function (c) { return c.isPrimary; })[0];
+    return flagged || suggestedFirst(l);
+  }
+
+  function setPrimary(id, cid) {
+    var l = findLead(id);
+    if (!l) return;
+    var target = findContact(l, cid);
+    if (!target) return;
+    var turningOff = !!target.isPrimary;
+    (l.contacts || []).forEach(function (c) { c.isPrimary = false; });
+    target.isPrimary = !turningOff;
+    persist();
+  }
+
+  function lastTouchDays(c) {
+    var d = c.lastContacted || latestTouchDate(c);
+    return isIsoDate(d) ? diffDays(todayStr(), d) : null;
+  }
+
+  // Companies where everyone you have contacted has gone quiet: suggest the next person.
+  function secondContactPrompts() {
+    var out = [];
+    state.leads.forEach(function (l) {
+      if (DEAD_STATUSES.indexOf(l.status) !== -1) return;
+      var contacts = l.contacts || [];
+      var started = contacts.filter(function (c) { return (c.stage || "Not contacted") !== "Not contacted"; });
+      if (!started.length) return;
+      var engaged = started.some(function (c) { return c.stage === "Replied" || c.stage === "Meeting booked"; });
+      if (engaged) return;
+      var quiet = started.filter(function (c) {
+        if (c.stage === "Not interested") return false;
+        var d = lastTouchDays(c);
+        return c.stage === "No response" || (d !== null && d >= QUIET_DAYS);
+      });
+      var stillActive = started.filter(function (c) { return c.stage !== "Not interested" && c.stage !== "No response"; });
+      // Every started contact must be quiet (or closed out) before we suggest someone new.
+      if (!quiet.length || stillActive.some(function (c) { return quiet.indexOf(c) === -1; })) return;
+      var waiting = quiet[0];
+      var days = lastTouchDays(waiting);
+      var untouched = contacts.filter(function (c) { return (c.stage || "Not contacted") === "Not contacted"; });
+      untouched.sort(function (a, b) { return titleScore(b.title) - titleScore(a.title); });
+      out.push({ lead: l, quiet: waiting, days: days, next: untouched[0] || null });
+    });
+    out.sort(function (a, b) { return (b.days || 0) - (a.days || 0); });
+    return out;
+  }
+
+  function coverageHtml(l) {
+    var have = {};
+    (l.contacts || []).forEach(function (c) { (c.roles || []).forEach(function (r) { have[r] = true; }); });
+    var pills = CONTACT_ROLES.map(function (r) {
+      return '<span class="cov ' + (have[r] ? "cov-yes" : "cov-no") + '">' + (have[r] ? "✓ " : "") + r + '</span>';
+    }).join("");
+    return '<div class="coverage"><span class="cov-label">Roles covered at this company</span>' + pills + '</div>';
+  }
+
+  function newOutreachToday() {
+    var today = todayStr(), n = 0;
+    state.leads.forEach(function (l) {
+      (l.contacts || []).forEach(function (c) {
+        (c.activities || []).forEach(function (a) {
+          if (a.type === "LinkedIn connection" && a.direction !== "Inbound" && a.date === today) n++;
+        });
+      });
+    });
+    return n;
+  }
+
   function cadenceFollowUp(stage, baseIso) {
     var n = CADENCE_DAYS[stage];
     return n ? addDays(baseIso, n) : "";
@@ -421,6 +608,7 @@
           '<div><label>Direction</label><select ' + af("direction") + '>' + dirOpts + '</select></div>' +
           '<div><label>Date</label><input type="date" value="' + escapeHtml(f.date) + '" ' + af("date") + '></div>' +
         '</div>' +
+        (f.direction !== "Inbound" && f.type !== "Note" && seqStep(c) < SEQUENCE.length ? '<p class="af-touch">Counts as touch ' + (seqStep(c) + 1) + ' of ' + SEQUENCE.length + ' in the outreach plan.</p>' : '') +
         '<div><label>Summary</label><textarea placeholder="e.g. Sent connection request with the nearshore intro note" ' + af("summary") + '>' + escapeHtml(f.summary) + '</textarea></div>' +
         '<div class="af-grid af-grid-2">' +
           '<div><label>Move contact to stage</label><select ' + af("moveStage") + '>' + stageOpts + '</select></div>' +
@@ -456,22 +644,28 @@
       ? '<div class="activity-list">' + acts.map(function (x) { return renderActivity(l, c, x.a); }).join("") + '</div>'
       : '<div class="act-empty">No activity logged yet.</div>';
     var linkedinOk = /^https?:\/\//.test(c.linkedin || "");
+    var fc = firstContact(l);
+    var isFirst = fc && fc.id === c.id && (l.contacts || []).length > 0;
+    var firstBadge = c.isPrimary ? '<span class="first-badge">★ First contact</span>' : (isFirst && (l.contacts || []).length > 1 ? '<span class="first-badge first-suggest" title="Best fit by job title">★ Suggested first</span>' : "");
     return '' +
-      '<div class="contact-card">' +
+      '<div class="contact-card' + (c.isPrimary ? ' is-primary' : '') + '">' +
         '<div class="contact-head">' +
           '<div class="avatar">' + escapeHtml(initialsOf(c.name)) + '</div>' +
           '<div class="ct-name-wrap"><input class="ct-name-input" type="text" value="' + escapeHtml(c.name) + '" placeholder="Contact name" data-action="edit-contact" data-field="name" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
+          firstBadge +
           '<select class="mini ct-stage" data-action="set-contact-stage" data-id="' + l.id + '" data-cid="' + c.id + '" aria-label="Outreach stage"' + d + '>' +
             CONTACT_STAGES.map(function (s) { return '<option value="' + s + '"' + (stage === s ? " selected" : "") + '>' + s + '</option>'; }).join("") +
           '</select>' +
           (readOnly ? "" : '<button class="btn btn-ghost btn-sm" type="button" data-action="remove-contact" data-id="' + l.id + '" data-cid="' + c.id + '" aria-label="Remove contact">✕</button>') +
         '</div>' +
         '<div class="ct-crm">' +
+          renderSequenceBlock(l, c) +
           '<div class="ct-meta">' +
             '<span>Last contacted: <strong>' + (c.lastContacted ? fmtDate(c.lastContacted) : "never") + '</strong></span>' +
             '<label>Next follow-up <input type="date" value="' + escapeHtml(c.nextFollowUp || "") + '" data-action="set-followup" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></label>' +
             dueBadgeFor(c) +
             (linkedinOk ? '<a href="' + escapeHtml(c.linkedin) + '" target="_blank" rel="noopener">LinkedIn ↗</a>' : '') +
+            (readOnly || (l.contacts || []).length < 2 ? "" : '<button type="button" class="btn-link" data-action="toggle-primary" data-id="' + l.id + '" data-cid="' + c.id + '">' + (c.isPrimary ? "Remove first-contact flag" : "Make first contact") + '</button>') +
           '</div>' +
           (formOpen ? renderActivityForm(l, c) : (readOnly ? "" : '<div><button class="btn btn-sm" type="button" data-action="open-activity-form" data-id="' + l.id + '" data-cid="' + c.id + '">+ Log activity</button></div>')) +
           timeline +
@@ -490,7 +684,11 @@
 
   function renderContactsPanel(l) {
     var body = l.contacts.length ? l.contacts.map(function (c) { return renderContactCard(l, c); }).join("") : '<p style="color:var(--ink-soft);margin:4px 0">No contacts yet.</p>';
-    return '<h4>Contacts</h4>' + body + (readOnly ? "" : '<button class="btn btn-sm" type="button" data-action="add-contact" data-id="' + l.id + '">+ Add contact</button>');
+    var fcN = firstContact(l);
+    var hint = (l.contacts.length > 1 && fcN)
+      ? '<p class="help" style="margin:0 0 8px">Reach out to <strong>' + escapeHtml(fcN.name || "(unnamed contact)") + '</strong> first' + (fcN.isPrimary ? "." : " (best fit by job title). Use “Make first contact” on a card to choose someone else.") + ' If they go quiet for ' + QUIET_DAYS + ' days, the CRM tab suggests the next person.</p>'
+      : '';
+    return '<h4>Contacts</h4>' + (l.contacts.length ? coverageHtml(l) : '') + hint + body + (readOnly ? "" : '<button class="btn btn-sm" type="button" data-action="add-contact" data-id="' + l.id + '">+ Add contact</button>');
   }
 
   function renderClientInfoPanel(l) {
@@ -751,12 +949,15 @@
 
   function renderActionRow(lead, c, badge, logLabel) {
     var who = c.name || "(unnamed contact)";
+    var nt = nextTouch(c);
+    var label = nt ? "Log touch " + nt.n : logLabel;
     return '' +
       '<div class="ar">' +
-        '<div class="ar-main"><div class="nm">' + escapeHtml(who) + '</div>' +
-        '<div class="rt">' + escapeHtml(lead.company) + ' · ' + escapeHtml(c.stage || "Not contacted") + (c.lastContacted ? ' · last touch ' + fmtDate(c.lastContacted) : '') + '</div></div>' +
+        '<div class="ar-main"><div class="nm">' + escapeHtml(who) + (c.isPrimary ? ' <span class="first-badge">★ First</span>' : '') + '</div>' +
+        '<div class="rt">' + escapeHtml(lead.company) + ' · ' + escapeHtml(c.stage || "Not contacted") + (c.lastContacted ? ' · last touch ' + fmtDate(c.lastContacted) : '') + '</div>' +
+        (nt ? '<div class="rt rt-next">Next: ' + escapeHtml(touchShort(c, nt)) + '</div>' : '') + '</div>' +
         badge +
-        (readOnly ? "" : '<button class="btn btn-sm btn-primary" type="button" data-action="crm-log" data-id="' + lead.id + '" data-cid="' + c.id + '">' + logLabel + '</button>') +
+        (readOnly ? "" : '<button class="btn btn-sm btn-primary" type="button" data-action="crm-log" data-id="' + lead.id + '" data-cid="' + c.id + '">' + label + '</button>') +
         '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + lead.id + '">Open</button>' +
       '</div>';
   }
@@ -778,6 +979,7 @@
         '<div class="kb-name">' + escapeHtml(who) + '</div>' +
         '<div class="kb-co">' + escapeHtml(l.company) + (c.title ? ' · ' + escapeHtml(c.title) : '') + '</div>' +
         '<div class="kb-meta">' + (c.lastContacted ? 'Last ' + fmtDate(c.lastContacted) : 'No contact yet') + (badge ? ' ' + badge : '') + '</div>' +
+        '<div class="kb-seq" title="Outreach plan progress">' + SEQUENCE.map(function (t, i) { return '<span class="seq-dot' + (i < seqStep(c) ? ' done' : '') + '"></span>'; }).join("") + '<span>' + seqStep(c) + '/' + SEQUENCE.length + ' touches' + (c.isPrimary ? ' · ★ first' : '') + '</span></div>' +
         '<div class="kb-actions">' +
           (readOnly ? "" : '<button class="btn btn-sm" type="button" data-action="crm-log" data-id="' + l.id + '" data-cid="' + c.id + '">Log</button>') +
           '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + l.id + '">Open</button>' +
@@ -837,9 +1039,19 @@
     var overdue = scheduled.filter(function (x) { return x.days < 0; });
     var dueToday = scheduled.filter(function (x) { return x.days === 0; });
     var week = scheduled.filter(function (x) { return x.days >= 1 && x.days <= FOLLOWUP_WINDOW_DAYS; });
-    var start = items.filter(function (i) { return i.stage === "Not contacted" && !isIsoDate(i.contact.nextFollowUp); }).sort(function (a, b) {
+    // Start outreach: one person per company (the first contact) until that company has been approached.
+    var start = items.filter(function (i) {
+      if (i.stage !== "Not contacted" || isIsoDate(i.contact.nextFollowUp)) return false;
+      var started = (i.lead.contacts || []).some(function (c) { return (c.stage || "Not contacted") !== "Not contacted"; });
+      if (started) return false;
+      var fc = firstContact(i.lead);
+      return !fc || fc.id === i.contact.id;
+    }).sort(function (a, b) {
       return priorityRank(a.lead.priority) - priorityRank(b.lead.priority) || a.lead.company.localeCompare(b.lead.company);
     });
+    var seconds = secondContactPrompts();
+    var sentToday = newOutreachToday();
+    var roomToday = Math.max(0, DAILY_NEW_OUTREACH - sentToday);
     var inConversation = items.filter(function (i) { return i.stage === "Replied" || i.stage === "Meeting booked"; }).length;
 
     function rowsFor(list, limit, logLabel) {
@@ -847,8 +1059,22 @@
         return renderActionRow(x.lead, x.contact, '<span class="due-badge ' + dueClass(x.days) + '">' + dueLabel(x.days) + '</span>', logLabel);
       });
     }
-    var startRows = start.slice(0, 6).map(function (i) {
+    var startRows = start.slice(0, Math.max(roomToday, 3)).map(function (i) {
       return renderActionRow(i.lead, i.contact, '<span class="due-badge due-soon">Not started</span>', "Start");
+    });
+    var secondRows = seconds.slice(0, 6).map(function (x) {
+      var nx = x.next;
+      var quietWho = escapeHtml(x.quiet.name || "(unnamed contact)");
+      var quietFor = x.days === null ? "no reply" : "no reply for " + x.days + " days";
+      return '' +
+        '<div class="ar">' +
+          '<div class="ar-main"><div class="nm">' + (nx ? 'Reach out to ' + escapeHtml(nx.name || "(unnamed contact)") : 'Add a second contact') + '</div>' +
+          '<div class="rt">' + escapeHtml(x.lead.company) + (nx && nx.title ? ' · ' + escapeHtml(nx.title) : '') + '</div>' +
+          '<div class="rt rt-next">' + quietWho + ': ' + quietFor + '</div></div>' +
+          '<span class="due-badge due-today">Go wider</span>' +
+          (readOnly || !nx ? "" : '<button class="btn btn-sm btn-primary" type="button" data-action="crm-log" data-id="' + x.lead.id + '" data-cid="' + nx.id + '">Log touch 1</button>') +
+          '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + x.lead.id + '">' + (nx ? 'Open' : 'Add contact') + '</button>' +
+        '</div>';
     });
 
     var stats = '' +
@@ -859,7 +1085,7 @@
         '<div class="stat' + (overdue.length + dueToday.length > 0 ? " stat-highlight" : "") + '"><div class="num mono">' + (overdue.length + dueToday.length) + '</div><div class="lbl">Contact now</div></div>' +
       '</div>';
 
-    var cadenceText = Object.keys(CADENCE_DAYS).map(function (k) { return k + " → " + CADENCE_DAYS[k] + "d"; }).join(" · ");
+    var planText = SEQUENCE.map(function (t) { return t.n + ". " + t.name; }).join(" → ");
 
     return '' +
       stats +
@@ -872,9 +1098,11 @@
           renderActionGroup("Overdue", "ag-overdue", rowsFor(overdue, 6, "Log"), overdue.length, "Nothing overdue.") +
           renderActionGroup("Today", "ag-today", rowsFor(dueToday, 6, "Log"), dueToday.length, "Nothing due today.") +
           renderActionGroup("Next 7 days", "ag-week", rowsFor(week, 6, "Log"), week.length, "Nothing scheduled this week.") +
-          renderActionGroup("Start outreach", "ag-start", startRows, start.length, "Every saved contact has been reached out to.") +
+          renderActionGroup("Reach a second person", "ag-second", secondRows, seconds.length, "No company is waiting on a reply.") +
+          renderActionGroup("Start outreach", "ag-start", startRows, start.length, "Every company has been approached.") +
         '</div>' +
-        '<p class="help">Follow-up dates are suggested from the stage when you log activity or move a contact: ' + escapeHtml(cadenceText) + '. You can always change a date.</p>' +
+        '<p class="pace">New connection requests today: <strong>' + sentToday + '</strong> of ' + DAILY_NEW_OUTREACH + (roomToday > 0 ? ' — room for ' + roomToday + ' more. Spreading them across days keeps your LinkedIn account safe.' : ' — that is plenty for today. Come back tomorrow.') + '</p>' +
+        '<p class="help">Every contact follows a five-touch plan: ' + escapeHtml(planText) + '. Follow-up dates come from that plan and you can always change one. A reply pauses the plan.</p>' +
       '</div>' +
       '<div class="crm-section"><h3>Pipeline</h3>' + renderBoard(items) +
         '<p class="help">' + (readOnly ? "" : "Drag a card to a new column, or use its menu, to move a contact. ") + 'Contacts at companies marked Lost or Not a Fit are hidden.</p></div>' +
@@ -1013,7 +1241,7 @@
   function addContact(id) {
     var l = findLead(id);
     if (!l) return;
-    l.contacts.push({ id: "c" + Date.now().toString(36), name: "", title: "", email: "", phone: "", linkedin: "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", activities: [] });
+    l.contacts.push({ id: "c" + Date.now().toString(36), name: "", title: "", email: "", phone: "", linkedin: "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", sequenceStep: 0, isPrimary: false, activities: [] });
     var newId = l.contacts[l.contacts.length - 1].id;
     persist();
     var box = document.querySelector('.ct-name-input[data-cid="' + newId + '"]');
@@ -1039,12 +1267,19 @@
 
   /* ---- CRM actions ---- */
 
+  // Sequence step once this activity is saved: an outbound touch counts as one more touch.
+  function stepAfterLog(c, f, stageAfter) {
+    var step = Math.max(seqStep(c), STAGE_MIN_STEP[stageAfter] || 0);
+    if (f.direction !== "Inbound" && f.type !== "Note") step = Math.min(SEQUENCE.length, seqStep(c) + 1);
+    return Math.max(step, STAGE_MIN_STEP[stageAfter] || 0);
+  }
+
   function defaultFollowUp(f, c) {
     var existing = c.nextFollowUp || "";
     if (f.type === "Note") return existing;
     var stageAfter = f.moveStage || c.stage || "Not contacted";
     var base = isIsoDate(f.date) ? f.date : todayStr();
-    var cadence = cadenceFollowUp(stageAfter, base);
+    var cadence = sequenceFollowUp(c, stageAfter, stepAfterLog(c, f, stageAfter), base);
     if (cadence) return cadence;
     // No cadence for this stage (e.g. Meeting booked): drop a stale date, keep a future one.
     return existing && existing > todayStr() ? existing : "";
@@ -1061,10 +1296,11 @@
     var c = findContact(l, cid);
     if (!c) return;
     var stage = c.stage || "Not contacted";
+    var nt = nextTouch(c);
     activityForm = {
       leadId: id, cid: cid,
-      type: stage === "Not contacted" ? "LinkedIn connection" : "LinkedIn message",
-      direction: "Outbound", date: todayStr(), summary: "", moveStage: "", followUp: "",
+      type: nt ? touchType(c, nt) : (stage === "Not contacted" ? "LinkedIn connection" : "LinkedIn message"),
+      direction: "Outbound", date: todayStr(), summary: nt ? "Touch " + nt.n + ": " + nt.name : "", moveStage: "", followUp: "",
       stageTouched: false, followTouched: false
     };
     applyFormDefaults(c);
@@ -1082,7 +1318,9 @@
       type: f.type, direction: f.direction, date: date, summary: (f.summary || "").trim()
     });
     c.lastContacted = latestTouchDate(c);
+    var newStep = stepAfterLog(c, f, f.moveStage || c.stage || "Not contacted"); // before the stage changes
     if (f.moveStage) c.stage = f.moveStage;
+    c.sequenceStep = newStep;
     c.nextFollowUp = isIsoDate(f.followUp) ? f.followUp : "";
     if (c.stage === "Not interested") c.nextFollowUp = "";
     activityForm = null;
@@ -1107,17 +1345,43 @@
     if (prev === stage) { render(); return; }
     var today = todayStr();
     c.stage = stage;
+    c.sequenceStep = seqStageFloor(c, stage);
     if (stage === "Not interested") {
       c.nextFollowUp = "";
     } else {
       var due = !isIsoDate(c.nextFollowUp) || c.nextFollowUp <= today; // nothing scheduled, or already due
-      var cadence = cadenceFollowUp(stage, today);
-      if (cadence && due) c.nextFollowUp = cadence;
+      var cadence = sequenceFollowUp(c, stage, seqStep(c), today);
+      if (cadence && (due || cadence < c.nextFollowUp)) c.nextFollowUp = cadence; // an earlier nudge wins (e.g. they just accepted)
       else if (!cadence && due) c.nextFollowUp = "";
     }
     if (!c.activities) c.activities = [];
     c.activities.push({ id: newActId(), type: "Note", direction: "Outbound", date: today, summary: "Stage changed: " + prev + " → " + stage });
     autoAdvanceLead(l, stage);
+    persist();
+  }
+
+  function skipTouch(id, cid) {
+    var l = findLead(id);
+    var c = findContact(l, cid);
+    var nt = c && nextTouch(c);
+    if (!nt) return;
+    var today = todayStr();
+    c.activities = c.activities || [];
+    c.activities.push({ id: newActId(), type: "Note", direction: "Outbound", date: today, summary: "Skipped touch " + nt.n + " (" + nt.name + ")" });
+    c.sequenceStep = nt.n;
+    var nxt = sequenceFollowUp(c, c.stage || "Not contacted", seqStep(c), today);
+    if (nxt) c.nextFollowUp = nxt;
+    persist();
+  }
+
+  function setSeqStep(id, cid, value) {
+    var c = findContact(findLead(id), cid);
+    if (!c) return;
+    var n = parseInt(value, 10);
+    if (isNaN(n)) return;
+    c.sequenceStep = Math.min(SEQUENCE.length, Math.max(0, n));
+    var nxt = sequenceFollowUp(c, c.stage || "Not contacted", seqStep(c), todayStr());
+    if (nxt) c.nextFollowUp = nxt;
     persist();
   }
 
@@ -1405,6 +1669,8 @@
       return;
     }
     if (action === "followup-log") { openActivityForm(id, cid); gotoLead(id); return; }
+    if (action === "skip-touch") { skipTouch(id, cid); return; }
+    if (action === "toggle-primary") { setPrimary(id, cid); return; }
     if (action === "toggle-contact-role") { toggleContactRole(id, cid, t.getAttribute("data-role")); return; }
     if (action === "save-client-info") { saveClientInfo(id); return; }
     if (action === "add-document") { addDocument(id); return; }
@@ -1445,6 +1711,7 @@
     if (action === "set-priority") { setPriority(id, t.value); return; }
     if (action === "set-contact-stage") { setContactStage(id, cid, t.value); return; }
     if (action === "set-followup") { setFollowUp(id, cid, t.value); return; }
+    if (action === "set-seq-step") { setSeqStep(id, cid, t.value); return; }
     if (action === "af-field") {
       var f = activityForm;
       if (!f) return;

@@ -93,6 +93,8 @@ async function getState(pool) {
       stage: c.stage || "Not contacted",
       nextFollowUp: dateOrEmpty(c.next_follow_up),
       lastContacted: dateOrEmpty(c.last_contacted),
+      sequenceStep: c.sequence_step || 0,
+      isPrimary: !!c.is_primary,
       activities: (activitiesByContact[c.id] || []).map((a) => ({
         id: a.id, type: a.type, direction: a.direction, date: dateOrEmpty(a.activity_date), summary: a.summary || "",
       })),
@@ -178,12 +180,13 @@ async function putState(pool, state) {
       for (let i = 0; i < contacts.length; i++) {
         const c = contacts[i];
         await client.query(
-          `insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order, stage, next_follow_up, last_contacted)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          `insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order, stage, next_follow_up, last_contacted, sequence_step, is_primary)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
           [
             c.id, l.id, c.name || "", c.title || "", c.email || "", c.phone || "", c.linkedin || "", c.roles || [], i,
             CONTACT_STAGES.includes(c.stage) ? c.stage : "Not contacted",
             dateOrNull(c.nextFollowUp), dateOrNull(c.lastContacted),
+            Math.min(5, Math.max(0, parseInt(c.sequenceStep, 10) || 0)), c.isPrimary === true,
           ]
         );
         const acts = Array.isArray(c.activities) ? c.activities : [];

@@ -71,6 +71,13 @@ alter table contacts add column if not exists stage text not null default 'Not c
 alter table contacts add column if not exists next_follow_up date;
 alter table contacts add column if not exists last_contacted date;
 
+-- Outreach sequence + first-contact choice.
+-- sequence_step: how many touches of the 5-touch plan are done (0-5). is_primary: the person
+-- you reach out to first at that company.
+alter table contacts add column if not exists sequence_step integer not null default 0
+  check (sequence_step between 0 and 5);
+alter table contacts add column if not exists is_primary boolean not null default false;
+
 -- One row per touch with a contact (LinkedIn request/message, email, call, meeting).
 -- contact_id is deliberately NOT a foreign key: every save rewrites a lead's
 -- contacts rows (see server/state.js), which would cascade-delete the history.

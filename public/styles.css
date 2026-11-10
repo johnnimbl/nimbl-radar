@@ -265,3 +265,28 @@ input.ct-name-input:focus,input.ct-name-input:hover{border-color:var(--ink);back
 .modal select, .modal textarea{width:100%;border:1px solid var(--ink);background:var(--paper);color:var(--ink);border-radius:8px;padding:6px 9px;font-size:.82rem;font-family:inherit;}
 .modal textarea{resize:vertical;min-height:54px;}
 .kb-actions select.kb-move{flex-basis:100%;width:100%;max-width:none;font-size:.72rem;}
+
+/* ---- Outreach sequence + first contact ---- */
+.seq{border:1px solid var(--ink);background:var(--surface);border-radius:9px;padding:8px 10px;display:flex;flex-direction:column;gap:5px;}
+.seq-top{display:flex;align-items:center;gap:8px;font-size:.82rem;}
+.seq-dots,.kb-seq{display:inline-flex;align-items:center;gap:4px;}
+.seq-dot{width:9px;height:9px;border-radius:50%;border:1.5px solid var(--ink);background:transparent;display:inline-block;}
+.seq-dot.done{background:var(--teal);border-color:var(--teal);}
+.seq-dot.now{background:var(--yellow);}
+.seq-tip{font-size:.78rem;color:var(--ink-soft);line-height:1.4;}
+.seq-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.seq-set{font-size:.72rem;color:var(--ink-soft);display:inline-flex;align-items:center;gap:6px;}
+.kb-seq{font-size:.68rem;color:var(--ink-soft);gap:3px;margin-top:2px;}
+.kb-seq span:last-child{margin-left:4px;}
+.first-badge{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;background:var(--yellow);color:var(--ink);border:1px solid var(--ink);border-radius:999px;padding:1px 7px;white-space:nowrap;}
+.first-badge.first-suggest{background:transparent;border-style:dashed;}
+.contact-card.is-primary{box-shadow:0 0 0 2px var(--yellow);}
+.coverage{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px;}
+.cov-label{font-size:.72rem;color:var(--ink-soft);margin-right:2px;}
+.cov{font-size:.72rem;border-radius:999px;padding:1px 8px;border:1px solid var(--ink-soft);}
+.cov-yes{background:var(--teal);border-color:var(--teal);color:var(--paper);}
+.cov-no{color:var(--ink-soft);border-style:dashed;}
+.rt-next{color:var(--teal);font-weight:600;}
+.ag.ag-second{border-color:var(--warn);}
+.pace{font-size:.8rem;margin:10px 0 0;color:var(--ink);}
+.af-touch{font-size:.76rem;color:var(--teal);font-weight:600;margin:0;}
