@@ -16,12 +16,17 @@
   var STAGE_TO_STATUS = { "Connection sent": "Contacted", "Connected": "Contacted", "Message sent": "Contacted", "Replied": "Replied", "Meeting booked": "Meeting Booked" };
   var AUTO_ADVANCE_FROM = ["Not Started", "Researching", "Contacted", "Replied", "Meeting Booked"];
   var FOLLOWUP_WINDOW_DAYS = 7;
+  // Days until the next nudge once a contact reaches this stage. Edit these to change your rhythm.
+  var CADENCE_DAYS = { "Connection sent": 4, "Connected": 2, "Message sent": 5, "Replied": 2, "No response": 14 };
+  var BOARD_STAGES = ["Not contacted", "Connection sent", "Connected", "Message sent", "Replied", "Meeting booked", "No response", "Not interested"];
   var CANDIDATE_STAGES = ["Identified", "Call booked", "Screen Approved", "Presented", "Interviewing", "Pre-Approved", "Placed", "Not Placed"];
   var PAGE_SIZE_STEP = 8;
 
   var state = { lastScanned: "", roleTypes: [], leads: [] };
   var filters = { roleType: "All", priority: "All", status: "All", q: "" };
   var expandedId = null;
+  var view = window.location.hash === "#crm" ? "crm" : "leads";
+  var crmQuery = "";
   var activityForm = null; // the open "Log activity" form, if any (kept outside the DOM so re-renders do not lose it)
   var pageSize = PAGE_SIZE_STEP;
   var readOnly = false;
@@ -254,6 +259,21 @@
     return counts;
   }
 
+  function cadenceFollowUp(stage, baseIso) {
+    var n = CADENCE_DAYS[stage];
+    return n ? addDays(baseIso, n) : "";
+  }
+
+  function newActId() {
+    return "a" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  }
+
+  function setView(v) {
+    view = v === "crm" ? "crm" : "leads";
+    activityForm = null;
+    try { window.history.replaceState(null, "", view === "crm" ? "#crm" : window.location.pathname); } catch (e) { /* ignore */ }
+  }
+
   /* ---------------- rendering ---------------- */
 
   function renderChip(label, group, value, current) {
@@ -329,7 +349,7 @@
       body = '<div class="priority-empty">Nothing due in the next ' + FOLLOWUP_WINDOW_DAYS + ' days. Log an activity on a contact and set a next follow-up date to see it here.' +
         (nc > 0 ? ' ' + nc + ' saved contact' + (nc === 1 ? " hasn't" : "s haven't") + ' been contacted yet.' : '') + '</div>';
     }
-    return '<div class="priorities followups"><h3>Follow-ups due</h3><div class="priority-list">' + body + '</div></div>';
+    return '<div class="priorities followups"><h3>Follow-ups due <button class="btn-link" type="button" data-action="set-view" data-view="crm" style="margin-left:8px">Open CRM →</button></h3><div class="priority-list">' + body + '</div></div>';
   }
 
   function renderPriorities() {
@@ -411,6 +431,7 @@
           '<button type="button" class="chip" data-action="af-followup-quick" data-days="7">1 week</button>' +
           '<button type="button" class="chip" data-action="af-followup-quick" data-days="14">2 weeks</button>' +
           '<button type="button" class="chip" data-action="af-followup-quick" data-days="">No follow-up</button>' +
+          (f.followUp && !f.followTouched ? '<span class="af-hint">Suggested from the stage cadence</span>' : '') +
         '</div>' +
         '<div class="row-actions">' +
           '<button type="button" class="btn btn-sm" data-action="cancel-activity">Cancel</button>' +
@@ -426,7 +447,7 @@
       var active = c.roles && c.roles.indexOf(r) !== -1;
       return '<button type="button" class="role-pill' + (active ? ' active' : '') + '" data-action="toggle-contact-role" data-id="' + l.id + '" data-cid="' + c.id + '" data-role="' + r + '"' + d + '>' + r + '</button>';
     }).join("");
-    var formOpen = activityForm && activityForm.leadId === l.id && activityForm.cid === c.id;
+    var formOpen = view === "leads" && activityForm && activityForm.leadId === l.id && activityForm.cid === c.id;
     var acts = (c.activities || []).map(function (a, i) { return { a: a, i: i }; }).sort(function (x, y) {
       var dc = (y.a.date || "").localeCompare(x.a.date || "");
       return dc !== 0 ? dc : y.i - x.i;
@@ -707,6 +728,174 @@
       '</div>';
   }
 
+  function renderViewTabs() {
+    var due = dueNowCount();
+    function tab(v, label, extra) {
+      return '<button type="button" class="viewtab" role="tab" aria-selected="' + (view === v) + '" data-action="set-view" data-view="' + v + '">' + label + (extra || "") + '</button>';
+    }
+    return '<div class="viewtabs" role="tablist">' + tab("leads", "Leads") + tab("crm", "CRM", due > 0 ? ' <span class="tab-count">' + due + '</span>' : "") + '</div>';
+  }
+
+  function crmContacts() {
+    var q = crmQuery.trim().toLowerCase();
+    var out = [];
+    state.leads.forEach(function (l) {
+      if (DEAD_STATUSES.indexOf(l.status) !== -1) return;
+      (l.contacts || []).forEach(function (c) {
+        if (q && ((c.name || "") + " " + (c.title || "") + " " + l.company).toLowerCase().indexOf(q) === -1) return;
+        out.push({ lead: l, contact: c, stage: c.stage || "Not contacted" });
+      });
+    });
+    return out;
+  }
+
+  function renderActionRow(lead, c, badge, logLabel) {
+    var who = c.name || "(unnamed contact)";
+    return '' +
+      '<div class="ar">' +
+        '<div class="ar-main"><div class="nm">' + escapeHtml(who) + '</div>' +
+        '<div class="rt">' + escapeHtml(lead.company) + ' · ' + escapeHtml(c.stage || "Not contacted") + (c.lastContacted ? ' · last touch ' + fmtDate(c.lastContacted) : '') + '</div></div>' +
+        badge +
+        (readOnly ? "" : '<button class="btn btn-sm btn-primary" type="button" data-action="crm-log" data-id="' + lead.id + '" data-cid="' + c.id + '">' + logLabel + '</button>') +
+        '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + lead.id + '">Open</button>' +
+      '</div>';
+  }
+
+  function renderActionGroup(title, cls, rows, total, emptyText) {
+    return '' +
+      '<div class="ag ' + cls + '">' +
+        '<div class="ag-head"><h4>' + title + '</h4><span class="mono">' + total + '</span></div>' +
+        (rows.length ? rows.join("") : '<div class="ag-empty">' + emptyText + '</div>') +
+      '</div>';
+  }
+
+  function renderBoardCard(l, c) {
+    var who = c.name || "(unnamed contact)";
+    var stage = c.stage || "Not contacted";
+    var badge = dueBadgeFor(c) || (isIsoDate(c.nextFollowUp) && stage !== "Not interested" ? '<span class="kb-next">Next ' + fmtDate(c.nextFollowUp) + '</span>' : "");
+    return '' +
+      '<div class="kb-card"' + (readOnly ? "" : ' draggable="true" data-drag="' + l.id + '|' + c.id + '"') + '>' +
+        '<div class="kb-name">' + escapeHtml(who) + '</div>' +
+        '<div class="kb-co">' + escapeHtml(l.company) + (c.title ? ' · ' + escapeHtml(c.title) : '') + '</div>' +
+        '<div class="kb-meta">' + (c.lastContacted ? 'Last ' + fmtDate(c.lastContacted) : 'No contact yet') + (badge ? ' ' + badge : '') + '</div>' +
+        '<div class="kb-actions">' +
+          (readOnly ? "" : '<button class="btn btn-sm" type="button" data-action="crm-log" data-id="' + l.id + '" data-cid="' + c.id + '">Log</button>') +
+          '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + l.id + '">Open</button>' +
+          (readOnly ? "" : '<select class="mini kb-move" data-action="set-contact-stage" data-id="' + l.id + '" data-cid="' + c.id + '" aria-label="Move ' + escapeHtml(who) + ' to stage">' +
+            BOARD_STAGES.map(function (s) { return '<option value="' + s + '"' + (stage === s ? " selected" : "") + '>' + s + '</option>'; }).join("") + '</select>') +
+        '</div>' +
+      '</div>';
+  }
+
+  function renderBoard(items) {
+    var cols = BOARD_STAGES.map(function (stage) {
+      var cards = items.filter(function (i) { return i.stage === stage; }).sort(function (a, b) {
+        var fa = isIsoDate(a.contact.nextFollowUp) ? a.contact.nextFollowUp : "9999-12-31";
+        var fb = isIsoDate(b.contact.nextFollowUp) ? b.contact.nextFollowUp : "9999-12-31";
+        if (fa !== fb) return fa.localeCompare(fb);
+        return (a.contact.name || "").localeCompare(b.contact.name || "");
+      });
+      return '' +
+        '<div class="board-col" data-stage="' + stage + '">' +
+          '<div class="board-head"><span>' + stage + '</span><span class="mono">' + cards.length + '</span></div>' +
+          '<div class="board-body">' + (cards.length ? cards.map(function (i) { return renderBoardCard(i.lead, i.contact); }).join("") : '<div class="board-empty">' + (readOnly ? "—" : "Drop a contact here") + '</div>') + '</div>' +
+        '</div>';
+    }).join("");
+    return '<div class="board">' + cols + '</div>';
+  }
+
+  function renderRecentActivity() {
+    var all = [];
+    state.leads.forEach(function (l) {
+      (l.contacts || []).forEach(function (c) {
+        (c.activities || []).forEach(function (a, i) { all.push({ lead: l, contact: c, a: a, i: i }); });
+      });
+    });
+    all.sort(function (x, y) {
+      var dc = (y.a.date || "").localeCompare(x.a.date || "");
+      return dc !== 0 ? dc : y.i - x.i;
+    });
+    var rows = all.slice(0, 10).map(function (r) {
+      var inbound = r.a.direction === "Inbound";
+      return '' +
+        '<div class="ra" data-action="goto-lead" data-id="' + r.lead.id + '">' +
+          '<span class="ra-date">' + fmtDate(r.a.date) + '</span>' +
+          '<span class="ra-main"><strong>' + escapeHtml(r.contact.name || "(unnamed contact)") + '</strong> · ' + escapeHtml(r.lead.company) +
+            ' — ' + escapeHtml(r.a.type) + (r.a.type === "Note" ? "" : (inbound ? " ↙ in" : " ↗ out")) +
+            (r.a.summary ? ': ' + escapeHtml(r.a.summary.length > 110 ? r.a.summary.slice(0, 107) + "…" : r.a.summary) : '') + '</span>' +
+        '</div>';
+    }).join("");
+    return '<div class="crm-section"><h3>Recent communication</h3>' + (rows || '<div class="ag-empty">Nothing logged yet. Use "Log" on any contact to record a LinkedIn message, email, call or meeting.</div>') + '</div>';
+  }
+
+  function renderCrm() {
+    var items = crmContacts();
+    var today = todayStr();
+    var scheduled = items.filter(function (i) { return isIsoDate(i.contact.nextFollowUp) && i.stage !== "Not interested"; }).map(function (i) {
+      return { lead: i.lead, contact: i.contact, days: diffDays(i.contact.nextFollowUp, today) };
+    }).sort(function (a, b) { return a.days - b.days || a.lead.company.localeCompare(b.lead.company); });
+    var overdue = scheduled.filter(function (x) { return x.days < 0; });
+    var dueToday = scheduled.filter(function (x) { return x.days === 0; });
+    var week = scheduled.filter(function (x) { return x.days >= 1 && x.days <= FOLLOWUP_WINDOW_DAYS; });
+    var start = items.filter(function (i) { return i.stage === "Not contacted" && !isIsoDate(i.contact.nextFollowUp); }).sort(function (a, b) {
+      return priorityRank(a.lead.priority) - priorityRank(b.lead.priority) || a.lead.company.localeCompare(b.lead.company);
+    });
+    var inConversation = items.filter(function (i) { return i.stage === "Replied" || i.stage === "Meeting booked"; }).length;
+
+    function rowsFor(list, limit, logLabel) {
+      return list.slice(0, limit).map(function (x) {
+        return renderActionRow(x.lead, x.contact, '<span class="due-badge ' + dueClass(x.days) + '">' + dueLabel(x.days) + '</span>', logLabel);
+      });
+    }
+    var startRows = start.slice(0, 6).map(function (i) {
+      return renderActionRow(i.lead, i.contact, '<span class="due-badge due-soon">Not started</span>', "Start");
+    });
+
+    var stats = '' +
+      '<div class="stats">' +
+        '<div class="stat"><div class="num mono">' + items.length + '</div><div class="lbl">Contacts</div></div>' +
+        '<div class="stat"><div class="num mono">' + items.filter(function (i) { return i.stage === "Not contacted"; }).length + '</div><div class="lbl">Not contacted yet</div></div>' +
+        '<div class="stat"><div class="num mono">' + inConversation + '</div><div class="lbl">In conversation</div></div>' +
+        '<div class="stat' + (overdue.length + dueToday.length > 0 ? " stat-highlight" : "") + '"><div class="num mono">' + (overdue.length + dueToday.length) + '</div><div class="lbl">Contact now</div></div>' +
+      '</div>';
+
+    var cadenceText = Object.keys(CADENCE_DAYS).map(function (k) { return k + " → " + CADENCE_DAYS[k] + "d"; }).join(" · ");
+
+    return '' +
+      stats +
+      '<div class="crm-toolbar">' +
+        '<div class="search crm-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
+        '<input type="text" placeholder="Search contact or company" value="' + escapeHtml(crmQuery) + '" data-action="crm-search"></div>' +
+      '</div>' +
+      '<div class="crm-section"><h3>Who to contact</h3>' +
+        '<div class="crm-actions">' +
+          renderActionGroup("Overdue", "ag-overdue", rowsFor(overdue, 6, "Log"), overdue.length, "Nothing overdue.") +
+          renderActionGroup("Today", "ag-today", rowsFor(dueToday, 6, "Log"), dueToday.length, "Nothing due today.") +
+          renderActionGroup("Next 7 days", "ag-week", rowsFor(week, 6, "Log"), week.length, "Nothing scheduled this week.") +
+          renderActionGroup("Start outreach", "ag-start", startRows, start.length, "Every saved contact has been reached out to.") +
+        '</div>' +
+        '<p class="help">Follow-up dates are suggested from the stage when you log activity or move a contact: ' + escapeHtml(cadenceText) + '. You can always change a date.</p>' +
+      '</div>' +
+      '<div class="crm-section"><h3>Pipeline</h3>' + renderBoard(items) +
+        '<p class="help">' + (readOnly ? "" : "Drag a card to a new column, or use its menu, to move a contact. ") + 'Contacts at companies marked Lost or Not a Fit are hidden.</p></div>' +
+      renderRecentActivity();
+  }
+
+  function renderCrmModal() {
+    if (!activityForm) return "";
+    var l = findLead(activityForm.leadId);
+    var c = findContact(l, activityForm.cid);
+    if (!c) return "";
+    return '' +
+      '<div class="modal-backdrop" data-action="modal-backdrop">' +
+        '<div class="modal" role="dialog" aria-modal="true" aria-label="Log activity">' +
+          '<h3>Log activity</h3>' +
+          '<p class="help" style="margin:0 0 10px">' + escapeHtml(c.name || "(unnamed contact)") + ' · ' + escapeHtml(l.company) + ' · currently <strong>' + escapeHtml(c.stage || "Not contacted") + '</strong></p>' +
+          renderActivityForm(l, c) +
+        '</div>' +
+      '</div>';
+  }
+
   function render() {
     var html = '' +
       '<div class="topbar">' +
@@ -727,6 +916,8 @@
         '</div>' +
       '</div>' +
       (readOnly ? '<div class="readonly-note">This view is read-only — open the artifact in claude.ai as its owner to edit statuses, notes, and contacts.</div>' : '') +
+      renderViewTabs() +
+      (view === "crm" ? renderCrm() : (
       renderNewBanner() +
       renderStats() +
       renderFollowUps() +
@@ -735,7 +926,9 @@
       renderAddForm() +
       renderFilters() +
       renderTable() +
-      '<p class="help" style="margin-top:14px">New roles show up here after Claude runs a scan for you in chat — use the Refresh button above to copy a ready-made scan prompt, or just ask, e.g. "scan for new Salesforce Developer, Salesforce BA, and Databricks Data Engineer roles."</p>';
+      '<p class="help" style="margin-top:14px">New roles show up here after Claude runs a scan for you in chat — use the Refresh button above to copy a ready-made scan prompt, or just ask, e.g. "scan for new Salesforce Developer, Salesforce BA, and Databricks Data Engineer roles."</p>'
+      )) +
+      (view === "crm" ? renderCrmModal() : "");
     document.getElementById("app").innerHTML = html;
   }
 
@@ -815,9 +1008,14 @@
   /* ---- CRM actions ---- */
 
   function defaultFollowUp(f, c) {
-    var outboundTouch = f.direction === "Outbound" && f.type !== "Note" && f.type !== "Meeting";
-    if (outboundTouch) return addDays(todayStr(), 3);
-    return c.nextFollowUp || "";
+    var existing = c.nextFollowUp || "";
+    if (f.type === "Note") return existing;
+    var stageAfter = f.moveStage || c.stage || "Not contacted";
+    var base = isIsoDate(f.date) ? f.date : todayStr();
+    var cadence = cadenceFollowUp(stageAfter, base);
+    if (cadence) return cadence;
+    // No cadence for this stage (e.g. Meeting booked): drop a stale date, keep a future one.
+    return existing && existing > todayStr() ? existing : "";
   }
 
   function applyFormDefaults(c) {
@@ -848,7 +1046,7 @@
     if (!c.activities) c.activities = [];
     var date = isIsoDate(f.date) ? f.date : todayStr();
     c.activities.push({
-      id: "a" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      id: newActId(),
       type: f.type, direction: f.direction, date: date, summary: (f.summary || "").trim()
     });
     c.lastContacted = latestTouchDate(c);
@@ -873,8 +1071,20 @@
     var l = findLead(id);
     var c = findContact(l, cid);
     if (!c) return;
+    var prev = c.stage || "Not contacted";
+    if (prev === stage) { render(); return; }
+    var today = todayStr();
     c.stage = stage;
-    if (stage === "Not interested") c.nextFollowUp = "";
+    if (stage === "Not interested") {
+      c.nextFollowUp = "";
+    } else {
+      var due = !isIsoDate(c.nextFollowUp) || c.nextFollowUp <= today; // nothing scheduled, or already due
+      var cadence = cadenceFollowUp(stage, today);
+      if (cadence && due) c.nextFollowUp = cadence;
+      else if (!cadence && due) c.nextFollowUp = "";
+    }
+    if (!c.activities) c.activities = [];
+    c.activities.push({ id: newActId(), type: "Note", direction: "Outbound", date: today, summary: "Stage changed: " + prev + " → " + stage });
     autoAdvanceLead(l, stage);
     persist();
   }
@@ -1033,6 +1243,7 @@
   }
 
   function gotoLead(id) {
+    if (view !== "leads") setView("leads");
     filters = { roleType: "All", priority: "All", status: "All", q: "" };
     expandedId = id;
     var idx = filteredLeads().map(function (l) { return l.id; }).indexOf(id);
@@ -1132,6 +1343,9 @@
     if (action === "add-note") { addNote(id); return; }
     if (action === "add-contact") { addContact(id); return; }
     if (action === "remove-contact") { removeContact(id, cid); return; }
+    if (action === "set-view") { setView(t.getAttribute("data-view")); render(); return; }
+    if (action === "crm-log") { openActivityForm(id, cid); render(); return; }
+    if (action === "modal-backdrop") { if (e.target === t) { activityForm = null; render(); } return; }
     if (action === "open-activity-form") { openActivityForm(id, cid); render(); return; }
     if (action === "cancel-activity") { activityForm = null; render(); return; }
     if (action === "submit-activity") { submitActivity(id, cid); return; }
@@ -1192,7 +1406,8 @@
       var field = t.getAttribute("data-field");
       f[field] = t.value;
       var fc = findContact(findLead(f.leadId), f.cid);
-      if (field === "moveStage") { f.stageTouched = true; return; }
+      if (field === "moveStage") { f.stageTouched = true; if (fc) { applyFormDefaults(fc); render(); } return; }
+      if (field === "date") { if (fc) { applyFormDefaults(fc); render(); } return; }
       if (field === "followUp") { f.followTouched = true; return; }
       if ((field === "type" || field === "direction") && fc) { applyFormDefaults(fc); render(); }
       return;
@@ -1219,6 +1434,13 @@
   });
 
   document.getElementById("app").addEventListener("input", function (e) {
+    if (e.target.getAttribute("data-action") === "crm-search") {
+      crmQuery = e.target.value;
+      render();
+      var ci = document.querySelector('input[data-action="crm-search"]');
+      if (ci) { ci.focus(); ci.setSelectionRange(ci.value.length, ci.value.length); }
+      return;
+    }
     if (e.target.getAttribute("data-action") === "af-field" && activityForm) {
       activityForm[e.target.getAttribute("data-field")] = e.target.value;
       return;
@@ -1233,11 +1455,43 @@
   });
 
   document.getElementById("app").addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && view === "crm" && activityForm) { activityForm = null; render(); return; }
     if (e.key !== "Enter") return;
     var id = e.target.id;
     if (id === "cap-role-name") { e.preventDefault(); addRoleType(); }
     else if (id === "ql-url" || id === "ql-company") { e.preventDefault(); quickAdd(); }
     else if (id && id.indexOf("doc-input-") === 0) { e.preventDefault(); addDocument(id.slice("doc-input-".length)); }
+  });
+
+  // Drag a pipeline card onto another column to change that contact's stage.
+  var appEl = document.getElementById("app");
+  appEl.addEventListener("dragstart", function (e) {
+    var card = e.target.closest ? e.target.closest("[data-drag]") : null;
+    if (!card || !e.dataTransfer) return;
+    e.dataTransfer.setData("text/plain", card.getAttribute("data-drag"));
+    e.dataTransfer.effectAllowed = "move";
+    card.classList.add("dragging");
+  });
+  appEl.addEventListener("dragend", function () {
+    Array.prototype.forEach.call(appEl.querySelectorAll(".dragging, .drop"), function (el) { el.classList.remove("dragging", "drop"); });
+  });
+  appEl.addEventListener("dragover", function (e) {
+    var col = e.target.closest ? e.target.closest(".board-col") : null;
+    if (!col) return;
+    e.preventDefault();
+    col.classList.add("drop");
+  });
+  appEl.addEventListener("dragleave", function (e) {
+    var col = e.target.closest ? e.target.closest(".board-col") : null;
+    if (col && !col.contains(e.relatedTarget)) col.classList.remove("drop");
+  });
+  appEl.addEventListener("drop", function (e) {
+    var col = e.target.closest ? e.target.closest(".board-col") : null;
+    if (!col || !e.dataTransfer) return;
+    e.preventDefault();
+    var parts = (e.dataTransfer.getData("text/plain") || "").split("|");
+    if (parts.length !== 2) { render(); return; }
+    setContactStage(parts[0], parts[1], col.getAttribute("data-stage"));
   });
 
   function loadState() {
