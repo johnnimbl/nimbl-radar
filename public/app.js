@@ -943,30 +943,55 @@
     setTimeout(function () { t.remove(); }, 3200);
   }
 
+  // Saving works like this: every edit marks the data "dirty" and schedules a save. Only ONE save is
+  // ever in flight; edits made while it is running are sent in the next save, and an older server
+  // response is never allowed to overwrite newer edits that are still on screen.
   var saveTimer = null;
-  var pendingSave = false; // true from an edit until its save round-trip finishes
-  function persist() {
-    render();
+  var saveInFlight = false;
+  var dirty = false;
+  var pendingSave = false; // true while there are unsaved edits or a save is running
+
+  function userIsEditing() {
+    var a = document.activeElement;
+    var app = document.getElementById("app");
+    return !!(a && app && app.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+  }
+
+  // opts.noRender: the screen already shows the change (e.g. a text box the user just typed in),
+  // so don't rebuild the page — that would steal focus and swallow the click they're about to make.
+  function persist(opts) {
+    if (!(opts && opts.noRender)) render();
     if (readOnly) { toast("Read-only view — changes aren't saved."); return; }
-    clearTimeout(saveTimer);
+    dirty = true;
     pendingSave = true;
-    saveTimer = setTimeout(function () {
-      fetch("/api/state", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(state)
-      }).then(function (res) {
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        return res.json();
-      }).then(function (freshState) {
-        pendingSave = false;
-        state = freshState;
-        render();
-      }).catch(function (err) {
-        pendingSave = false;
-        toast("Couldn't save: " + (err && err.message ? err.message : "unknown error"));
-      });
-    }, 300);
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flushSave, 300);
+  }
+
+  function flushSave() {
+    if (saveInFlight || !dirty) return;
+    dirty = false;
+    saveInFlight = true;
+    fetch("/api/state", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state)
+    }).then(function (res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    }).then(function (freshState) {
+      saveInFlight = false;
+      if (dirty) { flushSave(); return; } // newer edits exist: save those next, keep what's on screen
+      pendingSave = false;
+      state = freshState;
+      if (!userIsEditing()) render();
+    }).catch(function (err) {
+      saveInFlight = false;
+      dirty = true; // keep the edits; they go out with the next save
+      toast("Couldn't save: " + (err && err.message ? err.message : "unknown error") + ". Retrying…");
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(flushSave, 5000);
+    });
   }
 
   /* ---------------- actions ---------------- */
@@ -989,7 +1014,10 @@
     var l = findLead(id);
     if (!l) return;
     l.contacts.push({ id: "c" + Date.now().toString(36), name: "", title: "", email: "", phone: "", linkedin: "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", activities: [] });
+    var newId = l.contacts[l.contacts.length - 1].id;
     persist();
+    var box = document.querySelector('.ct-name-input[data-cid="' + newId + '"]');
+    if (box) box.focus();
   }
 
   function removeContact(id, cid) {
@@ -1433,13 +1461,13 @@
     if (action === "edit-contact") {
       var l = findLead(id);
       var c = findContact(l, cid);
-      if (c) { c[t.getAttribute("data-field")] = t.value.trim(); persist(); }
+      if (c) { c[t.getAttribute("data-field")] = t.value.trim(); persist({ noRender: true }); }
       return;
     }
     if (action === "edit-candidate-field") {
       var l2 = findLead(id);
       var c2 = findCandidate(l2, cid);
-      if (c2) { setDeep(c2, t.getAttribute("data-field"), t.value.trim()); persist(); }
+      if (c2) { setDeep(c2, t.getAttribute("data-field"), t.value.trim()); persist({ noRender: true }); }
       return;
     }
     if (action === "set-candidate-stage") {
