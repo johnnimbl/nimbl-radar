@@ -1,9 +1,9 @@
 require("dotenv").config();
 const path = require("path");
 const express = require("express");
-const session = require("express-session");
 const passport = require("passport");
 const { pool } = require("./db");
+const { buildSession } = require("./session");
 const { getState, putState } = require("./state");
 const { configurePassport, ensureAuthenticated, googleLoginEnabled, ALLOWED_DOMAIN } = require("./auth");
 
@@ -32,17 +32,7 @@ if (process.env.APP_USER && process.env.APP_PASSWORD) {
 // Restricted to accounts on ALLOWED_DOMAIN (see server/auth.js). Skipped
 // entirely if GOOGLE_CLIENT_ID/SECRET aren't set, so local dev stays simple.
 configurePassport();
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET || "nimbl-radar-dev-secret-change-me",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    },
-  })
-);
+app.use(buildSession(pool));
 app.use(passport.initialize());
 app.use(passport.session());
 

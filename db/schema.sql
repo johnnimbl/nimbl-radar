@@ -130,3 +130,14 @@ create table if not exists candidate_documents (
   sort_order integer not null default 0
 );
 create index if not exists candidate_documents_candidate_id_idx on candidate_documents(candidate_id);
+
+-- Login sessions (server/session.js). Stored in the database so users stay signed in across
+-- server restarts. Row level security stays ON with no policies, so the table is not reachable
+-- through Supabase's public API; the app connects with its own database role.
+create table if not exists user_sessions (
+  sid varchar not null primary key,
+  sess json not null,
+  expire timestamp(6) not null
+);
+create index if not exists idx_user_sessions_expire on user_sessions (expire);
+alter table user_sessions enable row level security;
