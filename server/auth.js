@@ -10,6 +10,9 @@ const GoogleStrategy = require("passport-google-oauth20").Strategy;
 // Configure by setting these on the server (see .env.example):
 //   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET  — from Google Cloud Console
 //   GOOGLE_ALLOWED_DOMAIN                    — defaults to "nimbl.ai"
+//   GOOGLE_ALLOWED_EMAILS                    — optional, comma-separated individual
+//                                               addresses allowed in addition to the
+//                                               domain (e.g. a personal Gmail)
 //   PUBLIC_URL                               — this app's public https URL,
 //                                               used to build the callback URL
 //
@@ -18,6 +21,17 @@ const GoogleStrategy = require("passport-google-oauth20").Strategy;
 // who can reach it.
 
 const ALLOWED_DOMAIN = (process.env.GOOGLE_ALLOWED_DOMAIN || "nimbl.ai").toLowerCase();
+
+const ALLOWED_EMAILS = (process.env.GOOGLE_ALLOWED_EMAILS || "")
+  .split(",")
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+function isAllowedEmail(email) {
+  const e = (email || "").toLowerCase();
+  if (!e) return false;
+  return ALLOWED_EMAILS.includes(e) || e.split("@")[1] === ALLOWED_DOMAIN;
+}
 
 const googleLoginEnabled = Boolean(
   process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
@@ -44,9 +58,8 @@ function configurePassport() {
         const emailEntry = (profile.emails || []).find((e) => e.value) || {};
         const email = (emailEntry.value || "").toLowerCase();
         const verified = emailEntry.verified !== false; // passport-google-oauth20 sets this from Google
-        const domain = email.split("@")[1] || "";
 
-        if (!email || !verified || domain !== ALLOWED_DOMAIN) {
+        if (!email || !verified || !isAllowedEmail(email)) {
           return done(null, false, { message: "domain_not_allowed" });
         }
 
@@ -69,4 +82,4 @@ function ensureAuthenticated(req, res, next) {
   return res.redirect("/auth/login");
 }
 
-module.exports = { configurePassport, ensureAuthenticated, googleLoginEnabled, ALLOWED_DOMAIN };
+module.exports = { configurePassport, ensureAuthenticated, googleLoginEnabled, ALLOWED_DOMAIN, isAllowedEmail };

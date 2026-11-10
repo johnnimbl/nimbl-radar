@@ -51,7 +51,7 @@
       Continue with Google
     </a>
     <div id="error" class="error" style="display:none"></div>
-    <div class="footnote">Access is limited to @<span id="domain">nimbl.ai</span> accounts.</div>
+    <div class="footnote">Access is limited to approved accounts.</div>
   </div>
   <script>
     var params = new URLSearchParams(window.location.search);
@@ -60,7 +60,7 @@
       var box = document.getElementById("error");
       box.style.display = "block";
       box.textContent = err === "domain"
-        ? "That Google account isn't on the allowed domain. Sign in with your work account instead."
+        ? "That Google account isn't approved for this app. Sign in with an approved account instead."
         : "Sign-in didn't complete. Please try again.";
     }
   </script>
