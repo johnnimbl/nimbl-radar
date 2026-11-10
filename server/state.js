@@ -128,7 +128,8 @@ async function putState(pool, state) {
   try {
     await client.query("BEGIN");
 
-    await client.query("update meta set last_scanned = $1 where id = 1", [dateOrNull(state.lastScanned)]);
+    // last_scanned is owned by the scanner: never let a (possibly stale) browser tab move it backwards.
+    await client.query("update meta set last_scanned = greatest(last_scanned, $1::date) where id = 1", [dateOrNull(state.lastScanned)]);
 
     await client.query("delete from role_types");
     const roleTypes = Array.isArray(state.roleTypes) ? state.roleTypes : [];
@@ -137,13 +138,8 @@ async function putState(pool, state) {
     }
 
     const leads = Array.isArray(state.leads) ? state.leads : [];
-    const incomingIds = leads.map((l) => l.id);
-    const existing = await client.query("select id from leads");
-    for (const row of existing.rows) {
-      if (!incomingIds.includes(row.id)) {
-        await client.query("delete from leads where id = $1", [row.id]);
-      }
-    }
+    // Leads missing from the payload are NOT deleted: the app has no delete-lead action, and the daily
+    // scan adds leads directly to the database, so a stale browser tab must never wipe them out.
 
     for (const l of leads) {
       await client.query(

@@ -910,8 +910,8 @@
               '<span>' + escapeHtml(currentUser.name || currentUser.email) + '</span>' +
               '<button class="btn-link" type="button" data-action="logout">Log out</button>' +
             '</div>' : '') +
-          '<div class="scan-meta">Last scanned<br><span class="mono">' + fmtDate(state.lastScanned) + '</span></div>' +
-          '<button class="btn" type="button" data-action="refresh-scan">↻ Refresh</button>' +
+          '<div class="scan-meta" title="A scan for new roles runs automatically every day">Last scanned<br><span class="mono">' + fmtDate(state.lastScanned) + '</span></div>' +
+          '<button class="btn" type="button" data-action="refresh-scan" title="Load the newest leads from the daily scan">↻ Refresh</button>' +
           (readOnly ? "" : '<button class="btn btn-primary" type="button" data-action="open-add">+ Add lead</button>') +
         '</div>' +
       '</div>' +
@@ -926,7 +926,7 @@
       renderAddForm() +
       renderFilters() +
       renderTable() +
-      '<p class="help" style="margin-top:14px">New roles show up here after Claude runs a scan for you in chat — use the Refresh button above to copy a ready-made scan prompt, or just ask, e.g. "scan for new Salesforce Developer, Salesforce BA, and Databricks Data Engineer roles."</p>'
+      '<p class="help" style="margin-top:14px">New roles are found automatically by a daily scan and appear here with the NEW tag — use ↻ Refresh to load the latest. To change which roles are searched, edit the Tracking list above.</p>'
       )) +
       (view === "crm" ? renderCrmModal() : "");
     document.getElementById("app").innerHTML = html;
@@ -944,10 +944,12 @@
   }
 
   var saveTimer = null;
+  var pendingSave = false; // true from an edit until its save round-trip finishes
   function persist() {
     render();
     if (readOnly) { toast("Read-only view — changes aren't saved."); return; }
     clearTimeout(saveTimer);
+    pendingSave = true;
     saveTimer = setTimeout(function () {
       fetch("/api/state", {
         method: "PUT",
@@ -957,9 +959,11 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       }).then(function (freshState) {
+        pendingSave = false;
         state = freshState;
         render();
       }).catch(function (err) {
+        pendingSave = false;
         toast("Couldn't save: " + (err && err.message ? err.message : "unknown error"));
       });
     }, 300);
@@ -1195,17 +1199,30 @@
     persist();
   }
 
-  function refreshScan() {
-    var roles = state.roleTypes.join(", ");
-    var prompt = "Scan for new job openings at companies (ideally under 500 employees) for these roles: " + roles + ". Cross-check against the leads already in Nimbl Radar (avoid duplicates), and for any new company found, add it to the dashboard with a company profile, required skills, and a nearshore-fit assessment, matching the existing lead format.";
-    var done = function () { toast("Scan prompt copied to clipboard — paste it to Claude in chat to search for new leads."); };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(prompt).then(done).catch(function () {
-        toast('Couldn\'t copy automatically — ask Claude in chat: "' + prompt + '"');
-      });
-    } else {
-      toast('Ask Claude in chat: "' + prompt + '"');
-    }
+  // Pull the latest leads from the server (the daily scan adds new ones straight to the database).
+  // silent=true is the background refresh used when the tab regains focus.
+  function refreshData(silent) {
+    if (pendingSave) { if (!silent) toast("Saving your changes first — try again in a moment."); return; }
+    var before = state.leads.length;
+    var beforeNew = newRolesCount();
+    fetch("/api/state").then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return null; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    }).then(function (fresh) {
+      if (!fresh || pendingSave) return;
+      var typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      var changed = JSON.stringify(fresh) !== JSON.stringify(state);
+      if (silent && (typing || activityForm)) return; // don't disturb something being edited
+      if (changed) { state = fresh; render(); }
+      if (silent) return;
+      var added = state.leads.length - before;
+      toast(added > 0
+        ? added + " new lead" + (added === 1 ? "" : "s") + " since you last looked. Last scan: " + fmtDate(state.lastScanned) + "."
+        : "Up to date. Last scan: " + fmtDate(state.lastScanned) + " — new scans run automatically every day.");
+    }).catch(function (err) {
+      if (!silent) toast("Couldn't refresh: " + (err && err.message ? err.message : "unknown error"));
+    });
   }
 
   function quickAdd() {
@@ -1371,7 +1388,7 @@
     if (action === "remove-candidate-document") { removeCandidateDocument(id, cid, t.getAttribute("data-did")); return; }
     if (action === "add-role") { addRoleType(); return; }
     if (action === "remove-role") { removeRoleType(t.getAttribute("data-role")); return; }
-    if (action === "refresh-scan") { refreshScan(); return; }
+    if (action === "refresh-scan") { refreshData(false); return; }
     if (action === "logout") {
       fetch("/auth/logout", { method: "POST" }).then(function () { window.location.href = "/auth/login"; });
       return;
@@ -1516,6 +1533,10 @@
         '<div class="empty">Couldn\'t load data from the server: ' + escapeHtml(err.message) + '. Is the API running and DATABASE_URL configured?</div>';
     });
   }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && state.leads.length) refreshData(true);
+  });
 
   document.title = "Nimbl Radar";
   loadState();
