@@ -5,6 +5,7 @@ const passport = require("passport");
 const { pool } = require("./db");
 const { buildSession } = require("./session");
 const { getState, putState } = require("./state");
+const { listPlaybook, upsertPlaybookItem, deletePlaybookItem } = require("./playbook");
 const { configurePassport, ensureAuthenticated, googleLoginEnabled, ALLOWED_DOMAIN } = require("./auth");
 
 const app = express();
@@ -81,6 +82,36 @@ app.put("/api/state", ensureAuthenticated, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to save state." });
+  }
+});
+
+app.get("/api/playbook", ensureAuthenticated, async (req, res) => {
+  try {
+    res.json(await listPlaybook(pool));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to load the playbook." });
+  }
+});
+
+app.put("/api/playbook/:id", ensureAuthenticated, async (req, res) => {
+  try {
+    const ok = await upsertPlaybookItem(pool, { ...(req.body || {}), id: req.params.id });
+    if (!ok) return res.status(400).json({ error: "Invalid playbook item." });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to save the playbook item." });
+  }
+});
+
+app.delete("/api/playbook/:id", ensureAuthenticated, async (req, res) => {
+  try {
+    await deletePlaybookItem(pool, req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to delete the playbook item." });
   }
 });
 

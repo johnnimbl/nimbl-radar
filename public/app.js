@@ -39,7 +39,15 @@
   var state = { lastScanned: "", roleTypes: [], leads: [] };
   var filters = { roleType: "All", priority: "All", status: "All", q: "" };
   var expandedId = null;
-  var view = window.location.hash === "#crm" ? "crm" : "leads";
+  var view = window.location.hash === "#crm" ? "crm" : (window.location.hash === "#playbook" ? "playbook" : "leads");
+  var playbook = [];                 // research notes, objection cheat sheet, templates (see server/playbook.js)
+  var pbDraft = { body: "", tag: "Research" }; // the note being written/dictated (kept outside the DOM)
+  var pbPending = 0;                 // playbook saves in flight
+  var NOTE_TAGS = ["Research", "Concern", "Objection heard", "Prospect insight"];
+  var TEMPLATE_TAGS = ["Touch 1 · Connection request", "Touch 2 · First message", "Touch 3 · Email", "Touch 4 · Value add", "Touch 5 · Last note", "Reply to an objection", "Other"];
+  var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  var dictation = { rec: null, on: false, lang: "en-US" };
+  try { dictation.lang = window.localStorage.getItem("radar-dictation-lang") || "en-US"; } catch (e) { /* ignore */ }
   var crmQuery = "";
   var activityForm = null; // the open "Log activity" form, if any (kept outside the DOM so re-renders do not lose it)
   var pageSize = PAGE_SIZE_STEP;
@@ -456,9 +464,10 @@
   }
 
   function setView(v) {
-    view = v === "crm" ? "crm" : "leads";
+    view = v === "crm" ? "crm" : (v === "playbook" ? "playbook" : "leads");
     activityForm = null;
-    try { window.history.replaceState(null, "", view === "crm" ? "#crm" : window.location.pathname); } catch (e) { /* ignore */ }
+    stopDictation();
+    try { window.history.replaceState(null, "", view === "leads" ? window.location.pathname : "#" + view); } catch (e) { /* ignore */ }
   }
 
   /* ---------------- rendering ---------------- */
@@ -931,7 +940,7 @@
     function tab(v, label, extra) {
       return '<button type="button" class="viewtab" role="tab" aria-selected="' + (view === v) + '" data-action="set-view" data-view="' + v + '">' + label + (extra || "") + '</button>';
     }
-    return '<div class="viewtabs" role="tablist">' + tab("leads", "Leads") + tab("crm", "CRM", due > 0 ? ' <span class="tab-count">' + due + '</span>' : "") + '</div>';
+    return '<div class="viewtabs" role="tablist">' + tab("leads", "Leads") + tab("crm", "CRM", due > 0 ? ' <span class="tab-count">' + due + '</span>' : "") + tab("playbook", "Playbook") + '</div>';
   }
 
   function crmContacts() {
@@ -1124,6 +1133,209 @@
       '</div>';
   }
 
+  /* ---------------- playbook ---------------- */
+
+  function newPbId() { return "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+
+  function findPb(id) {
+    for (var i = 0; i < playbook.length; i++) if (playbook[i].id === id) return playbook[i];
+    return null;
+  }
+
+  function pbSave(item) {
+    pbPending++;
+    return fetch("/api/playbook/" + encodeURIComponent(item.id), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: item.kind, title: item.title, body: item.body, tag: item.tag })
+    }).then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+    }).catch(function (err) {
+      toast("Couldn't save to the playbook: " + (err && err.message ? err.message : "unknown error") + ". Try again.");
+    }).then(function () { pbPending--; });
+  }
+
+  function pbDelete(id) {
+    pbPending++;
+    return fetch("/api/playbook/" + encodeURIComponent(id), { method: "DELETE" }).catch(function () {
+      toast("Couldn't delete that item. Try again.");
+    }).then(function () { pbPending--; });
+  }
+
+  function pbAdd(kind) {
+    var item = { id: newPbId(), kind: kind, title: "", body: "", tag: kind === "template" ? TEMPLATE_TAGS[0] : "", createdAt: new Date().toISOString() };
+    playbook.push(item);
+    pbSave(item);
+    render();
+    var box = document.querySelector('[data-pid="' + item.id + '"][data-field="title"]');
+    if (box) box.focus();
+  }
+
+  function pbAddNote() {
+    var body = (pbDraft.body || "").trim();
+    if (!body) { toast("Type or dictate something first."); return; }
+    stopDictation();
+    var item = { id: newPbId(), kind: "note", title: "", body: body, tag: pbDraft.tag, createdAt: new Date().toISOString() };
+    playbook.push(item);
+    pbDraft.body = "";
+    pbSave(item);
+    render();
+    toast("Note saved. Claude can read it when writing your templates.");
+  }
+
+  function pbRemove(id) {
+    var item = findPb(id);
+    if (!item) return;
+    var label = item.kind === "note" ? "this note" : "“" + (item.title || "this item") + "”";
+    if (!window.confirm("Delete " + label + "? This can't be undone.")) return;
+    playbook = playbook.filter(function (x) { return x.id !== id; });
+    pbDelete(id);
+    render();
+  }
+
+  function pbCopy(id) {
+    var item = findPb(id);
+    if (!item) return;
+    var text = item.body || "";
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { toast("Copied."); }, function () { toast("Couldn't copy. Select the text and copy it by hand."); });
+    } else {
+      toast("Couldn't copy. Select the text and copy it by hand.");
+    }
+  }
+
+  function stopDictation() {
+    if (dictation.rec && dictation.on) { try { dictation.rec.stop(); } catch (e) { /* ignore */ } }
+    dictation.on = false;
+  }
+
+  function toggleDictation() {
+    if (!SpeechRec) return;
+    if (dictation.on) { stopDictation(); render(); return; }
+    var rec = new SpeechRec();
+    rec.lang = dictation.lang;
+    rec.continuous = true;
+    rec.interimResults = true;
+    var base = pbDraft.body ? pbDraft.body.replace(/\s+$/, "") + " " : "";
+    var finalText = "";
+    rec.onresult = function (ev) {
+      var interim = "";
+      for (var i = ev.resultIndex; i < ev.results.length; i++) {
+        var r = ev.results[i];
+        if (r.isFinal) finalText += r[0].transcript + " "; else interim += r[0].transcript;
+      }
+      pbDraft.body = base + finalText + interim;
+      var ta = document.getElementById("pb-draft");
+      if (ta) ta.value = pbDraft.body;
+    };
+    rec.onerror = function (ev) {
+      var code = ev && ev.error;
+      if (code === "not-allowed" || code === "service-not-allowed") toast("The microphone is blocked. Allow it from the lock icon in your browser's address bar, then try again.");
+      else if (code === "no-speech") toast("Didn't hear anything. Try again.");
+      else if (code !== "aborted") toast("Dictation stopped (" + code + ").");
+    };
+    rec.onend = function () {
+      var wasOn = dictation.on;
+      dictation.on = false;
+      pbDraft.body = (base + finalText).replace(/\s+$/, "");
+      if (wasOn || view === "playbook") { if (view === "playbook") render(); }
+    };
+    dictation.rec = rec;
+    dictation.on = true;
+    try { rec.start(); } catch (e) { dictation.on = false; toast("Couldn't start the microphone."); }
+    render();
+  }
+
+  function micIcon() {
+    return '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+  }
+
+  function fmtIsoDay(iso) {
+    var d = iso ? new Date(iso) : null;
+    if (!d || isNaN(d.getTime())) return "";
+    return fmtDate(d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()));
+  }
+
+  function renderPbCard(item, opts) {
+    var d = readOnly ? " disabled" : "";
+    function f(field) { return 'data-action="pb-edit" data-field="' + field + '" data-pid="' + item.id + '"' + d; }
+    var head = '';
+    if (item.kind === "note") {
+      head = '<span class="pb-tagpill">' + escapeHtml(item.tag || "Note") + '</span><span class="pb-date">' + escapeHtml(fmtIsoDay(item.createdAt)) + '</span>';
+    } else {
+      head = '<input class="pb-title" type="text" placeholder="' + escapeHtml(opts.titlePlaceholder) + '" value="' + escapeHtml(item.title) + '" ' + f("title") + '>';
+      if (item.kind === "template") {
+        var tags = TEMPLATE_TAGS.slice();
+        if (item.tag && tags.indexOf(item.tag) === -1) tags.push(item.tag);
+        head += '<select class="mini" ' + f("tag") + ' aria-label="Which touch is this for">' + tags.map(function (t) { return '<option value="' + escapeHtml(t) + '"' + (item.tag === t ? " selected" : "") + '>' + escapeHtml(t) + '</option>'; }).join("") + '</select>';
+      }
+    }
+    return '' +
+      '<div class="pb-card">' +
+        '<div class="pb-head">' + head +
+          '<span class="pb-actions">' +
+            (item.kind === "note" ? "" : '<button type="button" class="btn btn-sm" data-action="pb-copy" data-pid="' + item.id + '">Copy</button>') +
+            (readOnly ? "" : '<button type="button" class="btn btn-ghost btn-sm" data-action="pb-delete" data-pid="' + item.id + '" aria-label="Delete">✕</button>') +
+          '</span>' +
+        '</div>' +
+        '<textarea class="pb-body" rows="' + (item.kind === "note" ? 3 : 4) + '" placeholder="' + escapeHtml(opts.bodyPlaceholder) + '" ' + f("body") + '>' + escapeHtml(item.body) + '</textarea>' +
+      '</div>';
+  }
+
+  function renderPlaybook() {
+    var notes = playbook.filter(function (x) { return x.kind === "note"; }).slice().sort(function (a, b) { return (b.createdAt || "").localeCompare(a.createdAt || ""); });
+    var objections = playbook.filter(function (x) { return x.kind === "objection"; });
+    var templates = playbook.filter(function (x) { return x.kind === "template"; });
+    var tagOpts = NOTE_TAGS.map(function (t) { return '<option value="' + t + '"' + (pbDraft.tag === t ? " selected" : "") + '>' + t + '</option>'; }).join("");
+    var langOpts = [["en-US", "English"], ["es-ES", "Español"]].map(function (l) { return '<option value="' + l[0] + '"' + (dictation.lang === l[0] ? " selected" : "") + '>' + l[1] + '</option>'; }).join("");
+    var mic = SpeechRec
+      ? '<button type="button" class="btn btn-sm mic-btn' + (dictation.on ? ' mic-on' : '') + '" data-action="pb-dictate" aria-pressed="' + dictation.on + '">' + micIcon() + (dictation.on ? ' Stop dictating' : ' Dictate') + '</button>' +
+        '<select class="mini" data-action="pb-lang" aria-label="Dictation language"' + (dictation.on ? " disabled" : "") + '>' + langOpts + '</select>'
+      : '<span class="help" style="margin:0">Dictation isn\'t available in this browser. Try Chrome, Edge or Safari, or use your keyboard\'s built-in dictation in the box.</span>';
+    var form = readOnly ? "" : '' +
+      '<div class="pb-form">' +
+        '<textarea id="pb-draft" class="pb-body" rows="4" data-action="pb-draft" placeholder="Type or dictate: what you learned, a concern, something prospects keep saying…">' + escapeHtml(pbDraft.body) + '</textarea>' +
+        '<div class="pb-form-row">' + mic +
+          '<select class="mini" data-action="pb-tag" aria-label="Note type">' + tagOpts + '</select>' +
+          '<button type="button" class="btn btn-sm btn-primary" data-action="pb-add-note">Save note</button>' +
+          (dictation.on ? '<span class="pb-listening">Listening…</span>' : '') +
+        '</div>' +
+      '</div>';
+    return '' +
+      '<div class="crm-section"><h3>Research notes</h3>' +
+        '<p class="help" style="margin:0 0 10px">Anything you have learned or worry about that could shape outreach. Saved notes are stored in Radar, and Claude reads them when you ask it to write templates or tune the plan. Dictation uses your browser\'s speech recognition, which may send the audio to the browser maker (Google, in Chrome).</p>' +
+        form +
+        '<div class="pb-list">' + (notes.length ? notes.map(function (n) { return renderPbCard(n, { bodyPlaceholder: "Note" }); }).join("") : '<div class="ag-empty">No notes yet.</div>') + '</div>' +
+      '</div>' +
+      '<div class="crm-section"><h3>Objection cheat sheet</h3>' +
+        '<p class="help" style="margin:0 0 10px">What a prospect might say, and how to answer. Edit anything to match how Nimbl really works.</p>' +
+        '<div class="pb-list">' + (objections.length ? objections.map(function (o) { return renderPbCard(o, { titlePlaceholder: "What they say", bodyPlaceholder: "How to answer" }); }).join("") : '<div class="ag-empty">No objections yet.</div>') + '</div>' +
+        (readOnly ? "" : '<button type="button" class="btn btn-sm" data-action="pb-add" data-kind="objection">+ Add objection</button>') +
+      '</div>' +
+      '<div class="crm-section"><h3>Message templates</h3>' +
+        '<p class="help" style="margin:0 0 10px">Ready-to-send messages for each touch. Ask Claude to write a set from your research notes, or write your own. Copy puts the text on your clipboard for LinkedIn.</p>' +
+        '<div class="pb-list">' + (templates.length ? templates.map(function (t) { return renderPbCard(t, { titlePlaceholder: "Template name", bodyPlaceholder: "Message text" }); }).join("") : '<div class="ag-empty">No templates yet. When you are ready, ask Claude to generate them.</div>') + '</div>' +
+        (readOnly ? "" : '<button type="button" class="btn btn-sm" data-action="pb-add" data-kind="template">+ Add template</button>') +
+      '</div>';
+  }
+
+  function loadPlaybook() {
+    return fetch("/api/playbook").then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return null; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    }).then(function (items) {
+      if (!items || pbPending > 0) return;
+      if (JSON.stringify(items) !== JSON.stringify(playbook)) {
+        playbook = items;
+        var a = document.activeElement;
+        var typing = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+        if (view === "playbook" && !typing && !dictation.on) render();
+      }
+    }).catch(function () { /* the playbook is optional; leads keep working without it */ });
+  }
+
   function render() {
     var html = '' +
       '<div class="topbar">' +
@@ -1145,7 +1357,7 @@
       '</div>' +
       (readOnly ? '<div class="readonly-note">This view is read-only — open the artifact in claude.ai as its owner to edit statuses, notes, and contacts.</div>' : '') +
       renderViewTabs() +
-      (view === "crm" ? renderCrm() : (
+      (view === "crm" ? renderCrm() : view === "playbook" ? renderPlaybook() : (
       renderNewBanner() +
       renderStats() +
       renderFollowUps() +
@@ -1497,6 +1709,7 @@
     if (pendingSave) { if (!silent) toast("Saving your changes first — try again in a moment."); return; }
     var before = state.leads.length;
     var beforeNew = newRolesCount();
+    if (!silent || !dictation.on) loadPlaybook();
     fetch("/api/state").then(function (res) {
       if (res.status === 401) { window.location.href = "/auth/login"; return null; }
       if (!res.ok) throw new Error("HTTP " + res.status);
@@ -1669,6 +1882,11 @@
       return;
     }
     if (action === "followup-log") { openActivityForm(id, cid); gotoLead(id); return; }
+    if (action === "pb-add-note") { pbAddNote(); return; }
+    if (action === "pb-dictate") { toggleDictation(); return; }
+    if (action === "pb-add") { pbAdd(t.getAttribute("data-kind")); return; }
+    if (action === "pb-delete") { pbRemove(t.getAttribute("data-pid")); return; }
+    if (action === "pb-copy") { pbCopy(t.getAttribute("data-pid")); return; }
     if (action === "skip-touch") { skipTouch(id, cid); return; }
     if (action === "toggle-primary") { setPrimary(id, cid); return; }
     if (action === "toggle-contact-role") { toggleContactRole(id, cid, t.getAttribute("data-role")); return; }
@@ -1712,6 +1930,17 @@
     if (action === "set-contact-stage") { setContactStage(id, cid, t.value); return; }
     if (action === "set-followup") { setFollowUp(id, cid, t.value); return; }
     if (action === "set-seq-step") { setSeqStep(id, cid, t.value); return; }
+    if (action === "pb-tag") { pbDraft.tag = t.value; return; }
+    if (action === "pb-lang") {
+      dictation.lang = t.value;
+      try { window.localStorage.setItem("radar-dictation-lang", t.value); } catch (e) { /* ignore */ }
+      return;
+    }
+    if (action === "pb-edit") {
+      var pbItem = findPb(t.getAttribute("data-pid"));
+      if (pbItem) { pbItem[t.getAttribute("data-field")] = t.value; pbSave(pbItem); }
+      return;
+    }
     if (action === "af-field") {
       var f = activityForm;
       if (!f) return;
@@ -1753,6 +1982,7 @@
       if (ci) { ci.focus(); ci.setSelectionRange(ci.value.length, ci.value.length); }
       return;
     }
+    if (e.target.getAttribute("data-action") === "pb-draft") { pbDraft.body = e.target.value; return; }
     if (e.target.getAttribute("data-action") === "af-field" && activityForm) {
       activityForm[e.target.getAttribute("data-field")] = e.target.value;
       return;
@@ -1823,6 +2053,7 @@
       if (!loaded) return; // redirecting to login
       state = loaded;
       render();
+      loadPlaybook();
     }).catch(function (err) {
       document.getElementById("app").innerHTML =
         '<div class="empty">Couldn\'t load data from the server: ' + escapeHtml(err.message) + '. Is the API running and DATABASE_URL configured?</div>';

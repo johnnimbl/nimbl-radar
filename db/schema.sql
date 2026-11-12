@@ -148,3 +148,42 @@ create table if not exists user_sessions (
 );
 create index if not exists idx_user_sessions_expire on user_sessions (expire);
 alter table user_sessions enable row level security;
+
+-- Playbook: research notes, the objection cheat sheet and message templates.
+-- kind = 'note' (your own research / concerns, typed or dictated), 'objection'
+-- (title = what the prospect says, body = how to answer) or 'template' (title = name,
+-- tag = which touch it is for, body = the message). RLS on, like the other tables.
+create table if not exists playbook_items (
+  id text primary key,
+  kind text not null check (kind in ('note','objection','template')),
+  title text not null default '',
+  body text not null default '',
+  tag text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists playbook_items_kind_idx on playbook_items(kind, created_at);
+alter table playbook_items enable row level security;
+
+-- Starter objection cheat sheet (edit or delete freely in the app).
+insert into playbook_items (id, kind, title, body, created_at) values
+('obj-cost','objection','We expected bigger savings',
+$b$Agree it is not the cheapest option: offshore in India or Eastern Europe costs less per hour. Position nearshore on total value: faster time to fill, real overlap with their team's hours, and one monthly cost with no recruiting fee, benefits admin or foreign entity to set up.
+Ask: "What does the open seat cost you each month while it stays unfilled?"$b$, now() + interval '1 second'),
+('obj-timezone','objection','Time zones will slow us down',
+$b$Name the country the developer is in and how many hours overlap with their team. Most Latin American developers are within 0-3 hours of US Eastern time. Offer a fixed overlap window for standups and reviews.
+Ask: "Which hours do you need someone online?"$b$, now() + interval '2 seconds'),
+('obj-quality','objection','Quality and English level',
+$b$Do not debate it, show it. Offer 2-3 anonymized profiles for the role, let them interview the people, and, if Nimbl's terms allow, a short trial period. Technical skill and English are tested in the interview, not assumed.$b$, now() + interval '3 seconds'),
+('obj-legal','objection','Legal, tax and contractor-misclassification risk',
+$b$This is the most serious worry, so answer it exactly. Explain how the person is engaged (contractor or employer-of-record), who carries compliance and local benefits, and that IP assignment is written into the contract. Do not give legal advice; suggest their counsel review the agreement.
+TODO: write in Nimbl's actual engagement model here.$b$, now() + interval '4 seconds'),
+('obj-manage','objection','I do not have time to manage another person',
+$b$The developer joins their standups, tools and process and takes direction like any teammate. Offer a clear first-month onboarding plan and, if Nimbl offers it, a replacement if it is not working.$b$, now() + interval '5 seconds'),
+('obj-vendor','objection','We already have a vendor or we are not ready to switch',
+$b$Do not ask them to switch. Offer a pilot: one role or one project, alongside what they have now. Be honest that there is a short ramp-up while the new person learns the codebase.$b$, now() + interval '6 seconds'),
+('obj-investors','objection','Leadership or investors may see this as outsourcing',
+$b$Frame it as extending their own team with a dedicated hire, not handing the product to an agency. The developer works inside their repo, tools and roadmap.$b$, now() + interval '7 seconds'),
+('obj-badexp','objection','We tried it before and it went badly',
+$b$Ask what went wrong: the vetting, the time zone, the communication, the contract? Then show how your process differs on that exact point. Do not defend nearshoring in general.$b$, now() + interval '8 seconds')
+on conflict (id) do nothing;
