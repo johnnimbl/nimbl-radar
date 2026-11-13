@@ -12,7 +12,7 @@ const ACTIVITY_TYPES = ["LinkedIn connection", "LinkedIn message", "Email", "Cal
 const ACTIVITY_DIRECTIONS = ["Outbound", "Inbound"];
 
 function emptyClientInfo() {
-  return { address: "", phone: "", taxId: "", currency: "USD" };
+  return { address: "", phone: "", taxId: "", currency: "USD", linkedin: "" };
 }
 
 function emptyContractor() {

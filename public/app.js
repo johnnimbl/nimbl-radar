@@ -871,6 +871,9 @@
         '<div><label>Tax ID</label><input type="text" id="ci-taxid-' + l.id + '" value="' + escapeHtml(l.clientInfo.taxId) + '"' + d + '></div>' +
         '<div><label>Currency</label><input type="text" id="ci-currency-' + l.id + '" value="' + escapeHtml(l.clientInfo.currency) + '"' + d + '></div>' +
       '</div>' +
+      '<div class="field-row field-row-1">' +
+        '<div><label>Company LinkedIn</label><input type="url" id="ci-linkedin-' + l.id + '" placeholder="https://www.linkedin.com/company/…" value="' + escapeHtml(l.clientInfo.linkedin || "") + '"' + d + '></div>' +
+      '</div>' +
       (readOnly ? "" : '<div class="row-actions"><button class="btn btn-sm" type="button" data-action="save-client-info" data-id="' + l.id + '">Save client info</button></div>');
   }
 
@@ -1006,6 +1009,7 @@
           '<div class="links">' +
             (l.jobUrl ? '<a href="' + escapeHtml(l.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : "") +
             (l.website ? '<a href="' + escapeHtml(l.website) + '" target="_blank" rel="noopener">Company site ↗</a>' : "") +
+            linkedinLink(l, "Company LinkedIn") +
             mailto +
           '</div>' +
           '<p class="help">To reach out, ask Claude in chat — e.g. "Draft outreach to ' + escapeHtml(l.company) + '." Claude will use these notes to write the email and create a Gmail draft for you to review before anything is sent.</p>' +
@@ -1879,10 +1883,14 @@
     var company = '' +
       '<section class="cc-sec"><h3>Company</h3>' +
         '<p class="cc-text">' + escapeHtml(profile) + '</p>' +
+        (l.clientInfo && l.clientInfo.linkedinSummary ? '<div class="li-snap"><span class="li-tag">LinkedIn</span> ' + escapeHtml(l.clientInfo.linkedinSummary) +
+          (l.clientInfo.linkedinChecked ? ' <span class="li-when">· checked ' + fmtDate(l.clientInfo.linkedinChecked) + '</span>' : '') + '</div>' : '') +
         '<div class="cc-facts">' +
           (l.estSize ? '<span><em>Size</em> ' + escapeHtml(shortText(l.estSize, 60)) + '</span>' : '') +
           (l.endClient ? '<span><em>End client</em> ' + escapeHtml(l.endClient) + '</span>' : '') +
         '</div>' +
+        (companyLinkedin(l) || l.website ? '<div class="links">' + linkedinLink(l, "Company LinkedIn") +
+          (l.website ? '<a href="' + escapeHtml(l.website) + '" target="_blank" rel="noopener">Company site ↗</a>' : '') + '</div>' : '') +
         (fit ? '<h4>Nearshore fit</h4><p class="cc-text">' + escapeHtml(fit) + '</p>' : '') +
         (hasMore ? '<button type="button" class="btn-link" data-action="card-more">' + (cardMore ? 'Show less' : 'Show full details') + '</button>' : '') +
       '</section>' +
@@ -1896,7 +1904,6 @@
         (skills ? '<p class="cc-text">' + escapeHtml(skills) + '</p>' : '') +
         '<div class="links">' +
           (l.jobUrl ? '<a href="' + escapeHtml(l.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') +
-          (l.website ? '<a href="' + escapeHtml(l.website) + '" target="_blank" rel="noopener">Company site ↗</a>' : '') +
         '</div>' +
         ((l.roleAlerts || []).length ? '<h4>Found since</h4><div class="nr-list">' + l.roleAlerts.map(function (a) { return renderAlertLine(l, a, false); }).join("") + '</div>' : '') +
       '</section>';
@@ -1910,7 +1917,7 @@
         '<div class="cc-back"><button type="button" class="btn btn-sm" data-action="crm-back">← All prospects</button>' +
           (readOnly ? "" : '<button type="button" class="btn-link" data-action="crm-remove" data-id="' + l.id + '">Remove from CRM</button>') + '</div>' +
         '<header class="cc-head">' +
-          '<div><h2>' + escapeHtml(l.company) + '</h2><div class="cc-sub">Saved ' + fmtDate(l.crmSavedAt) + (l.estSize ? ' · ' + escapeHtml(shortText(l.estSize, 40)) : '') + '</div></div>' +
+          '<div><h2>' + escapeHtml(l.company) + '</h2><div class="cc-sub">Saved ' + fmtDate(l.crmSavedAt) + (l.estSize ? ' · ' + escapeHtml(shortText(l.estSize, 40)) : '') + (companyLinkedin(l) ? ' · ' + linkedinLink(l) : '') + '</div></div>' +
         '</header>' +
         (unseenAlerts(l).length ? '<section class="nr-panel" aria-label="New roles posted">' +
           '<div class="nr-head"><span class="cc-lbl">New role' + (unseenAlerts(l).length === 1 ? '' : 's') + ' posted since you saved this company</span>' +
@@ -2426,15 +2433,35 @@
     persist();
   }
 
+  // The company's LinkedIn page, kept in client info (entered by hand or filled in by Claude).
+  function companyLinkedin(l) {
+    var u = ((l.clientInfo && l.clientInfo.linkedin) || "").trim();
+    return /^https?:\/\/([a-z]+\.)?linkedin\.com\//i.test(u) ? u : "";
+  }
+
+  function linkedinLink(l, label) {
+    var u = companyLinkedin(l);
+    return u ? '<a href="' + escapeHtml(u) + '" target="_blank" rel="noopener">' + (label || "LinkedIn") + ' ↗</a>' : "";
+  }
+
   function saveClientInfo(id) {
     var l = findLead(id);
     if (!l) return;
-    l.clientInfo = {
-      address: document.getElementById("ci-address-" + id).value.trim(),
-      phone: document.getElementById("ci-phone-" + id).value.trim(),
-      taxId: document.getElementById("ci-taxid-" + id).value.trim(),
-      currency: document.getElementById("ci-currency-" + id).value.trim() || "USD"
-    };
+    var prev = l.clientInfo || {};
+    var next = {};
+    Object.keys(prev).forEach(function (k) { next[k] = prev[k]; });
+    next.address = document.getElementById("ci-address-" + id).value.trim();
+    next.phone = document.getElementById("ci-phone-" + id).value.trim();
+    next.taxId = document.getElementById("ci-taxid-" + id).value.trim();
+    next.currency = document.getElementById("ci-currency-" + id).value.trim() || "USD";
+    var li = document.getElementById("ci-linkedin-" + id);
+    if (li) {
+      var v = li.value.trim();
+      if (v && !/^https?:\/\//i.test(v)) v = "https://" + v;
+      if (v && !/^https?:\/\/([a-z]+\.)?linkedin\.com\//i.test(v)) { toast("That doesn't look like a LinkedIn link. Paste the company's linkedin.com/company/… address."); return; }
+      next.linkedin = v;
+    }
+    l.clientInfo = next;
     persist();
     toast("Client info saved.");
   }
@@ -2573,7 +2600,7 @@
       jobUrl: url, datePosted: "", dateAdded: new Date().toISOString().slice(0, 10),
       employmentType: "", estSize: "", priority: "Medium", endClient: "", companyProfile: "",
       requiredSkills: "", nearshoreFit: "",
-      contacts: [], clientInfo: { address: "", phone: "", taxId: "", currency: "USD" }, documents: [], candidates: [],
+      contacts: [], clientInfo: { address: "", phone: "", taxId: "", currency: "USD", linkedin: "" }, documents: [], candidates: [],
       status: "Researching", isNew: false,
       notes: [{ date: new Date().toISOString().slice(0, 10), text: "Quick-added from a LinkedIn/job link. Ask Claude in chat to research and fill in the company details." }]
     };
@@ -2649,7 +2676,7 @@
       companyProfile: document.getElementById("af-profile").value.trim(),
       requiredSkills: document.getElementById("af-skills").value.trim(),
       nearshoreFit: document.getElementById("af-fit").value.trim(),
-      contacts: [], clientInfo: { address: "", phone: "", taxId: "", currency: "USD" }, documents: [], candidates: [],
+      contacts: [], clientInfo: { address: "", phone: "", taxId: "", currency: "USD", linkedin: "" }, documents: [], candidates: [],
       status: "Not Started",
       isNew: false,
       notes: [{ date: new Date().toISOString().slice(0, 10), text: "Added manually via dashboard." }]

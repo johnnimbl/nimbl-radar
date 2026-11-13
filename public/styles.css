@@ -527,3 +527,11 @@ input.ct-name-input:focus,input.ct-name-input:hover{border-color:var(--ink);back
 .first-confirm{font:inherit;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;background:var(--yellow);color:var(--ink);border:1px solid var(--ink);border-radius:999px;padding:1px 9px;cursor:pointer;}
 .first-confirm:hover{background:var(--ink);color:var(--paper);}
 .first-confirm:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
+
+/* Company LinkedIn */
+.field-row.field-row-1{grid-template-columns:1fr;}
+.li-snap{font-size:.8rem;line-height:1.5;margin:0 0 8px;}
+.li-tag{display:inline-block;font-size:.62rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--paper);background:#0a66c2;border-radius:4px;padding:1px 5px;margin-right:4px;vertical-align:1px;}
+.li-when{color:var(--ink-soft);font-size:.72rem;}
+.cc-sub a{color:var(--teal);font-weight:600;}
+.client-card .cc-sec .links{margin-top:6px;}
