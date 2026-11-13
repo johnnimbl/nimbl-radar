@@ -39,7 +39,20 @@
   var state = { lastScanned: "", roleTypes: [], leads: [] };
   var filters = { roleType: "All", priority: "All", status: "All", q: "" };
   var expandedId = null;
-  var view = window.location.hash === "#crm" ? "crm" : (window.location.hash === "#playbook" ? "playbook" : "leads");
+  var VIEWS = ["leads", "pipeline", "crm", "playbook"];
+  var crmLeadId = null;               // the prospect whose full client card is open (CRM tab), if any
+  var clientQuery = "";               // CRM list search box
+  var inClientCard = false;           // true while the full-page client card is being built (contact cards drop their own timeline)
+  var ctOpen = {};                    // client card: contact ids whose detail fields are expanded
+  var crmFilter = "Active";           // CRM list filter: Active / Clients / Closed / All
+  var cardMore = false;               // client card: show the full company text instead of the short version
+  var tlLimit = 12;                   // client card: how many timeline entries are showing
+  var view = "leads";
+  (function readHash() {
+    var h = (window.location.hash || "").replace(/^#/, "");
+    var parts = h.split("/");
+    if (VIEWS.indexOf(parts[0]) !== -1) { view = parts[0]; if (view === "crm" && parts[1]) crmLeadId = decodeURIComponent(parts[1]); }
+  }());
   var playbook = [];                 // research notes, objection cheat sheet, templates (see server/playbook.js)
   var pbDraft = { body: "", tag: "Research" }; // the note being written/dictated (kept outside the DOM)
   var pbPending = 0;                 // playbook saves in flight
@@ -464,8 +477,9 @@
   }
 
   function setView(v) {
-    view = v === "crm" ? "crm" : (v === "playbook" ? "playbook" : "leads");
+    view = VIEWS.indexOf(v) !== -1 ? v : "leads";
     activityForm = null;
+    crmLeadId = null;
     stopDictation();
     try { window.history.replaceState(null, "", view === "leads" ? window.location.pathname : "#" + view); } catch (e) { /* ignore */ }
   }
@@ -545,7 +559,7 @@
       body = '<div class="priority-empty">Nothing due in the next ' + FOLLOWUP_WINDOW_DAYS + ' days. Log an activity on a contact and set a next follow-up date to see it here.' +
         (nc > 0 ? ' ' + nc + ' saved contact' + (nc === 1 ? " hasn't" : "s haven't") + ' been contacted yet.' : '') + '</div>';
     }
-    return '<div class="priorities followups"><h3>Follow-ups due <button class="btn-link" type="button" data-action="set-view" data-view="crm" style="margin-left:8px">Open CRM →</button></h3><div class="priority-list">' + body + '</div></div>';
+    return '<div class="priorities followups"><h3>Follow-ups due <button class="btn-link" type="button" data-action="set-view" data-view="pipeline" style="margin-left:8px">Open Pipeline →</button></h3><div class="priority-list">' + body + '</div></div>';
   }
 
   function renderPriorities() {
@@ -645,6 +659,7 @@
       return '<button type="button" class="role-pill' + (active ? ' active' : '') + '" data-action="toggle-contact-role" data-id="' + l.id + '" data-cid="' + c.id + '" data-role="' + r + '"' + d + '>' + r + '</button>';
     }).join("");
     var formOpen = view === "leads" && activityForm && activityForm.leadId === l.id && activityForm.cid === c.id;
+    var detailsOpen = !inClientCard || !!ctOpen[c.id] || !c.name;
     var acts = (c.activities || []).map(function (a, i) { return { a: a, i: i }; }).sort(function (x, y) {
       var dc = (y.a.date || "").localeCompare(x.a.date || "");
       return dc !== 0 ? dc : y.i - x.i;
@@ -677,8 +692,10 @@
             (readOnly || (l.contacts || []).length < 2 ? "" : '<button type="button" class="btn-link" data-action="toggle-primary" data-id="' + l.id + '" data-cid="' + c.id + '">' + (c.isPrimary ? "Remove first-contact flag" : "Make first contact") + '</button>') +
           '</div>' +
           (formOpen ? renderActivityForm(l, c) : (readOnly ? "" : '<div><button class="btn btn-sm" type="button" data-action="open-activity-form" data-id="' + l.id + '" data-cid="' + c.id + '">+ Log activity</button></div>')) +
-          timeline +
+          (inClientCard ? "" : timeline) +
         '</div>' +
+        (inClientCard ? renderContactSummary(l, c, detailsOpen) : "") +
+        (detailsOpen ? (
         '<div class="field-row">' +
           '<div><label>Title</label><input type="text" value="' + escapeHtml(c.title) + '" data-action="edit-contact" data-field="title" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
           '<div><label>Phone</label><input type="text" value="' + escapeHtml(c.phone) + '" data-action="edit-contact" data-field="phone" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
@@ -687,15 +704,26 @@
           '<div><label>Email</label><input type="email" value="' + escapeHtml(c.email) + '" data-action="edit-contact" data-field="email" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
           '<div><label>LinkedIn</label><input type="text" value="' + escapeHtml(c.linkedin) + '" data-action="edit-contact" data-field="linkedin" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
         '</div>' +
-        '<div class="role-pills">' + rolesPills + '</div>' +
+        '<div class="role-pills">' + rolesPills + '</div>'
+        ) : "") +
       '</div>';
+  }
+
+  // Inside the client card a contact's editable fields stay folded away until asked for.
+  function renderContactSummary(l, c, open) {
+    var bits = [];
+    if (c.title) bits.push(escapeHtml(c.title));
+    if (c.email) bits.push('<a href="mailto:' + escapeHtml(c.email) + '">' + escapeHtml(c.email) + '</a>');
+    if (c.phone) bits.push(escapeHtml(c.phone));
+    return '<div class="ct-summary"><span>' + (bits.length ? bits.join(' · ') : 'No title or contact details yet') + '</span>' +
+      '<button type="button" class="btn-link" data-action="ct-toggle" data-cid="' + c.id + '" aria-expanded="' + (open ? "true" : "false") + '">' + (open ? "Hide details" : (readOnly ? "Show details" : "Edit details")) + '</button></div>';
   }
 
   function renderContactsPanel(l) {
     var body = l.contacts.length ? l.contacts.map(function (c) { return renderContactCard(l, c); }).join("") : '<p style="color:var(--ink-soft);margin:4px 0">No contacts yet.</p>';
     var fcN = firstContact(l);
     var hint = (l.contacts.length > 1 && fcN)
-      ? '<p class="help" style="margin:0 0 8px">Reach out to <strong>' + escapeHtml(fcN.name || "(unnamed contact)") + '</strong> first' + (fcN.isPrimary ? "." : " (best fit by job title). Use “Make first contact” on a card to choose someone else.") + ' If they go quiet for ' + QUIET_DAYS + ' days, the CRM tab suggests the next person.</p>'
+      ? '<p class="help" style="margin:0 0 8px">Reach out to <strong>' + escapeHtml(fcN.name || "(unnamed contact)") + '</strong> first' + (fcN.isPrimary ? "." : " (best fit by job title). Use “Make first contact” on a card to choose someone else.") + ' If they go quiet for ' + QUIET_DAYS + ' days, the Pipeline tab suggests the next person.</p>'
       : '';
     return '<h4>Contacts</h4>' + (l.contacts.length ? coverageHtml(l) : '') + hint + body + (readOnly ? "" : '<button class="btn btn-sm" type="button" data-action="add-contact" data-id="' + l.id + '">+ Add contact</button>');
   }
@@ -850,6 +878,7 @@
           (isWon ? renderDocumentsPanel(l) : "") +
         '</div>' +
         '<div>' +
+          renderCrmSaveBar(l) +
           '<h4>Priority &amp; status</h4>' +
           '<div class="field-row">' +
             '<div><label>Priority tier</label><select data-action="set-priority" data-id="' + l.id + '"' + d + '>' +
@@ -876,7 +905,7 @@
     var rows = '' +
       '<tr class="lead-row" data-expanded="' + expanded + '" data-action="toggle-row" data-id="' + l.id + '">' +
         '<td>' + (l.isNew ? '<span class="newtag">NEW</span>' : '<svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>') + '</td>' +
-        '<td><div class="company-cell"><div><div class="nm">' + escapeHtml(l.company) + (l.status === "Won" ? '<span class="client-badge">Client</span>' : '') + (leadDueCount(l) > 0 ? '<span class="due-badge due-today" style="margin-left:6px">Follow-up due</span>' : '') + '</div><span class="role-tag">' + escapeHtml(l.jobTitle) + '</span></div></div></td>' +
+        '<td><div class="company-cell"><div><div class="nm">' + escapeHtml(l.company) + (l.status === "Won" ? '<span class="client-badge">Client</span>' : '') + (l.inCrm ? '<span class="incrm-badge" title="Saved to your CRM">In CRM</span>' : '') + (leadDueCount(l) > 0 ? '<span class="due-badge due-today" style="margin-left:6px">Follow-up due</span>' : '') + '</div><span class="role-tag">' + escapeHtml(l.jobTitle) + '</span></div></div></td>' +
         '<td>' + escapeHtml(l.roleType) + '</td>' +
         '<td><span class="pill ' + priorityClass(l.priority) + '">' + l.priority + '</span></td>' +
         '<td class="mono">' + escapeHtml(l.estSize) + '</td>' +
@@ -940,7 +969,7 @@
     function tab(v, label, extra) {
       return '<button type="button" class="viewtab" role="tab" aria-selected="' + (view === v) + '" data-action="set-view" data-view="' + v + '">' + label + (extra || "") + '</button>';
     }
-    return '<div class="viewtabs" role="tablist">' + tab("leads", "Leads") + tab("crm", "CRM", due > 0 ? ' <span class="tab-count">' + due + '</span>' : "") + tab("playbook", "Playbook") + '</div>';
+    return '<div class="viewtabs" role="tablist">' + tab("leads", "Leads") + tab("pipeline", "Pipeline", due > 0 ? ' <span class="tab-count">' + due + '</span>' : "") + tab("crm", "CRM", crmLeads().length ? ' <span class="tab-count tab-count-quiet">' + crmLeads().length + '</span>' : "") + tab("playbook", "Playbook") + '</div>';
   }
 
   function crmContacts() {
@@ -1116,6 +1145,282 @@
       '<div class="crm-section"><h3>Pipeline</h3>' + renderBoard(items) +
         '<p class="help">' + (readOnly ? "" : "Drag a card to a new column, or use its menu, to move a contact. ") + 'Contacts at companies marked Lost or Not a Fit are hidden.</p></div>' +
       renderRecentActivity();
+  }
+
+  /* ---------------- CRM tab: saved prospects + full-page client card ---------------- */
+
+  function crmLeads() { return state.leads.filter(function (l) { return l.inCrm; }); }
+
+  function crmGroupOf(l) {
+    if (l.status === "Won") return "Clients";
+    if (DEAD_STATUSES.indexOf(l.status) !== -1) return "Closed";
+    return "Active";
+  }
+
+  // The soonest scheduled follow-up across this company's contacts.
+  function leadNextStep(l) {
+    var today = todayStr(), best = null;
+    (l.contacts || []).forEach(function (c) {
+      if (!isIsoDate(c.nextFollowUp) || c.stage === "Not interested") return;
+      var days = diffDays(c.nextFollowUp, today);
+      if (!best || days < best.days) best = { contact: c, days: days };
+    });
+    return best;
+  }
+
+  function leadLastActivity(l) {
+    var best = "";
+    (l.contacts || []).forEach(function (c) { (c.activities || []).forEach(function (a) { if (a.type !== "Note" && a.date && a.date > best) best = a.date; }); });
+    return best;
+  }
+
+  function shortText(t, n) {
+    t = (t || "").replace(/\s+/g, " ").trim();
+    if (t.length <= n) return t;
+    var cut = t.slice(0, n);
+    var sp = cut.lastIndexOf(" ");
+    return (sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[,;:.\s]+$/, "") + "…";
+  }
+
+  function saveToCrm(id) {
+    var l = findLead(id);
+    if (!l || l.inCrm) return;
+    l.inCrm = true;
+    l.crmSavedAt = todayStr();
+    persist();
+    toast(l.company + " saved to your CRM.");
+  }
+
+  function removeFromCrm(id) {
+    var l = findLead(id);
+    if (!l) return;
+    l.inCrm = false;
+    if (crmLeadId === id) crmLeadId = null;
+    try { if (view === "crm") window.history.replaceState(null, "", "#crm"); } catch (e) { /* ignore */ }
+    persist();
+    toast(l.company + " removed from the CRM. It is still in Leads.");
+  }
+
+  function openClient(id) {
+    var l = findLead(id);
+    if (!l || !l.inCrm) { gotoLead(id); return; }
+    view = "crm";
+    crmLeadId = id;
+    activityForm = null;
+    cardMore = false;
+    tlLimit = 12;
+    stopDictation();
+    try { window.history.pushState(null, "", "#crm/" + encodeURIComponent(id)); } catch (e) { /* ignore */ }
+    render();
+    window.scrollTo(0, 0);
+  }
+
+  function closeClient() {
+    crmLeadId = null;
+    activityForm = null;
+    try { window.history.pushState(null, "", "#crm"); } catch (e) { /* ignore */ }
+    render();
+    window.scrollTo(0, 0);
+  }
+
+  function renderCrmSaveBar(l) {
+    if (l.inCrm) {
+      return '<div class="crm-savebar crm-saved"><span><strong>In your CRM</strong> since ' + fmtDate(l.crmSavedAt) + '</span>' +
+        '<button type="button" class="btn btn-sm btn-primary" data-action="crm-open" data-id="' + l.id + '">Open client card →</button>' +
+        (readOnly ? "" : '<button type="button" class="btn-link" data-action="crm-remove" data-id="' + l.id + '">Remove from CRM</button>') + '</div>';
+    }
+    if (readOnly) return "";
+    return '<div class="crm-savebar"><span>Good prospect? Keep it in your CRM with its own client card.</span>' +
+      '<button type="button" class="btn btn-sm btn-primary" data-action="crm-save" data-id="' + l.id + '">★ Save to CRM</button></div>';
+  }
+
+  function renderClientListCard(l) {
+    var ns = leadNextStep(l);
+    var fc = ns ? ns.contact : firstContact(l);
+    var step = fc ? seqStep(fc) : 0;
+    var nC = (l.contacts || []).length;
+    var dots = SEQUENCE.map(function (t, i) { return '<span class="seq-dot' + (i < step ? ' done' : '') + '"></span>'; }).join("");
+    var last = leadLastActivity(l);
+    var nextHtml;
+    if (ns) {
+      nextHtml = '<span class="due-badge ' + dueClass(ns.days) + '">' + dueLabel(ns.days) + '</span> <span class="cl-who">' + escapeHtml(ns.contact.name || "(unnamed contact)") + '</span>';
+    } else if ((l.contacts || []).length) {
+      nextHtml = '<span class="cl-muted">No follow-up scheduled</span>';
+    } else {
+      nextHtml = '<span class="cl-muted">No contacts yet</span>';
+    }
+    return '' +
+      '<button type="button" class="cl-card" data-action="crm-open" data-id="' + l.id + '">' +
+        '<span class="cl-top"><span class="cl-name">' + escapeHtml(l.company) + '</span><span class="pill ' + priorityClass(l.priority) + '">' + l.priority + '</span></span>' +
+        '<span class="cl-role">' + escapeHtml(l.jobTitle || l.roleType || "") + '</span>' +
+        '<span class="cl-row"><span class="pill status-pill ' + statusClass(l.status) + '">' + escapeHtml(l.status) + '</span>' +
+          '<span class="cl-dots" title="Outreach plan: ' + step + ' of ' + SEQUENCE.length + ' touches">' + dots + '</span></span>' +
+        '<span class="cl-row cl-next">' + nextHtml + '</span>' +
+        '<span class="cl-foot">' + (nC ? nC + (nC === 1 ? ' contact' : ' contacts') : 'Add a contact to start outreach') +
+          (last ? ' · last touch ' + fmtDate(last) : (nC ? ' · no touches logged yet' : '')) + '</span>' +
+      '</button>';
+  }
+
+  function renderClients() {
+    if (crmLeadId) {
+      var open = findLead(crmLeadId);
+      if (open && open.inCrm) return renderClientCard(open);
+      if (state.leads.length) crmLeadId = null;
+    }
+    var all = crmLeads();
+    var q = clientQuery.trim().toLowerCase();
+    var counts = { Active: 0, Clients: 0, Closed: 0, All: all.length };
+    all.forEach(function (l) { counts[crmGroupOf(l)]++; });
+    var list = all.filter(function (l) {
+      if (crmFilter !== "All" && crmGroupOf(l) !== crmFilter) return false;
+      return !q || (l.company + " " + (l.jobTitle || "") + " " + (l.roleType || "")).toLowerCase().indexOf(q) !== -1;
+    });
+    list.sort(function (a, b) {
+      var na = leadNextStep(a), nb = leadNextStep(b);
+      var da = na ? na.days : 9999, db = nb ? nb.days : 9999;
+      return da - db || priorityRank(a.priority) - priorityRank(b.priority) || a.company.localeCompare(b.company);
+    });
+    var dueNow = all.filter(function (l) { var n = leadNextStep(l); return n && n.days <= 0 && crmGroupOf(l) === "Active"; }).length;
+    var talking = all.filter(function (l) { return l.status === "Replied" || l.status === "Meeting Booked" || l.status === "Proposal Sent"; }).length;
+    var stats = '' +
+      '<div class="stats">' +
+        '<div class="stat"><div class="num mono">' + counts.Active + '</div><div class="lbl">Active prospects</div></div>' +
+        '<div class="stat' + (dueNow > 0 ? " stat-highlight" : "") + '"><div class="num mono">' + dueNow + '</div><div class="lbl">Follow-ups due</div></div>' +
+        '<div class="stat"><div class="num mono">' + talking + '</div><div class="lbl">In conversation</div></div>' +
+        '<div class="stat"><div class="num mono">' + counts.Clients + '</div><div class="lbl">Clients won</div></div>' +
+      '</div>';
+    var chips = ["Active", "Clients", "Closed", "All"].map(function (g) {
+      return '<button class="chip" type="button" aria-pressed="' + (crmFilter === g) + '" data-action="crm-filter" data-value="' + g + '">' + g + ' (' + counts[g] + ')</button>';
+    }).join("");
+    var body;
+    if (!all.length) {
+      body = '<div class="empty crm-empty"><strong>No prospects in your CRM yet.</strong><br>When a lead looks worth pursuing, open it in the Leads tab and press <em>★ Save to CRM</em>. It then gets its own full-page client card here, with status, people, outreach plan, timeline and notes in one place.<div style="margin-top:12px"><button class="btn btn-primary" type="button" data-action="set-view" data-view="leads">Go to Leads</button></div></div>';
+    } else if (!list.length) {
+      body = '<div class="empty">No prospects match this filter.</div>';
+    } else {
+      body = '<div class="cl-grid">' + list.map(renderClientListCard).join("") + '</div>';
+    }
+    return stats +
+      '<div class="crm-toolbar cl-toolbar">' +
+        '<div class="chipset">' + chips + '</div>' +
+        '<div class="search crm-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
+        '<input type="text" placeholder="Search prospects" value="' + escapeHtml(clientQuery) + '" data-action="client-search"></div>' +
+      '</div>' + body;
+  }
+
+  function renderTimeline(l) {
+    var items = [];
+    (l.contacts || []).forEach(function (c) {
+      (c.activities || []).forEach(function (a, i) { items.push({ date: a.date || "", i: i, who: c.name || "(unnamed contact)", type: a.type, dir: a.direction, text: a.summary || "", cid: c.id, aid: a.id }); });
+    });
+    (l.notes || []).forEach(function (n, i) { items.push({ date: n.date || "", i: i, who: "Company note", type: "Note", dir: "", text: n.text || "", company: true }); });
+    items.sort(function (a, b) { var dc = b.date.localeCompare(a.date); return dc !== 0 ? dc : b.i - a.i; });
+    var shown = items.slice(0, tlLimit);
+    var rows = shown.map(function (it) {
+      var dirHtml = it.type === "Note" ? "" : '<span class="act-dir ' + (it.dir === "Inbound" ? "act-in" : "act-out") + '">' + (it.dir === "Inbound" ? "↙ In" : "↗ Out") + '</span>';
+      return '<div class="tl-item"><div class="tl-date">' + fmtDate(it.date) + '</div><div class="tl-main"><div class="tl-head"><span class="tl-who' + (it.company ? " tl-co" : "") + '">' + escapeHtml(it.who) + '</span><span class="tl-type">' + escapeHtml(it.type) + '</span>' + dirHtml +
+        (readOnly || !it.aid ? "" : '<button type="button" class="act-del" data-action="remove-activity" data-id="' + l.id + '" data-cid="' + it.cid + '" data-aid="' + escapeHtml(it.aid) + '" aria-label="Delete activity">✕</button>') + '</div>' +
+        (it.text ? '<div class="tl-text">' + escapeHtml(it.text) + '</div>' : '') + '</div></div>';
+    }).join("");
+    var more = items.length > shown.length ? '<button type="button" class="btn btn-sm" data-action="tl-more">Show more (' + (items.length - shown.length) + ' older)</button>' : '';
+    var note = readOnly ? "" : '<div class="add-note"><textarea id="note-input-' + l.id + '" placeholder="Add a note about this company: a call, an insight, a reminder…"></textarea><button class="btn btn-sm btn-primary" type="button" data-action="add-note" data-id="' + l.id + '">Add note</button></div>';
+    return '<section class="cc-sec"><h3>Activity &amp; notes</h3>' + note +
+      '<div class="tl">' + (rows || '<div class="ag-empty">Nothing logged yet. Log a touch from a contact above, or add a note.</div>') + '</div>' + more + '</section>';
+  }
+
+  function renderClientCard(l) {
+    var d = readOnly ? " disabled" : "";
+    var statusGroups = [
+      ["In progress", ["Not Started", "Researching", "Contacted", "Replied", "Meeting Booked", "Proposal Sent", "Won"]],
+      ["Closed", ["Lost", "Not a Fit"]]
+    ];
+    var statusHtml = statusGroups.map(function (g) {
+      return '<div class="seg-group"><span class="seg-label">' + g[0] + '</span><div class="seg">' + g[1].map(function (st) {
+        return '<button type="button" class="seg-btn ' + statusClass(st) + '" aria-pressed="' + (l.status === st) + '" data-action="card-status" data-id="' + l.id + '" data-value="' + escapeHtml(st) + '"' + d + '>' + escapeHtml(st) + '</button>';
+      }).join("") + '</div></div>';
+    }).join("");
+    var prioHtml = '<div class="seg">' + PRIORITIES.map(function (pr) {
+      return '<button type="button" class="seg-btn seg-prio-' + pr.toLowerCase() + '" aria-pressed="' + (l.priority === pr) + '" data-action="card-priority" data-id="' + l.id + '" data-value="' + pr + '"' + d + '>' + pr + '</button>';
+    }).join("") + '</div>';
+
+    // Next step
+    var ns = leadNextStep(l);
+    var nextHtml;
+    if (ns) {
+      var nt = nextTouch(ns.contact);
+      nextHtml = '<span class="due-badge ' + dueClass(ns.days) + '">' + dueLabel(ns.days) + '</span>' +
+        '<div class="ns-main"><strong>' + escapeHtml(ns.contact.name || "(unnamed contact)") + '</strong>' + (ns.contact.title ? ' · ' + escapeHtml(ns.contact.title) : '') +
+        '<div class="ns-sub">' + (nt ? escapeHtml(touchShort(ns.contact, nt)) : escapeHtml(ns.contact.stage || "Not contacted")) + ' · ' + fmtDate(ns.contact.nextFollowUp) + '</div></div>' +
+        (readOnly ? "" : '<button type="button" class="btn btn-primary" data-action="crm-log" data-id="' + l.id + '" data-cid="' + ns.contact.id + '">' + (nt ? 'Log touch ' + nt.n : 'Log activity') + '</button>');
+    } else {
+      var fc = firstContact(l);
+      if (fc && (fc.stage || "Not contacted") === "Not contacted") {
+        nextHtml = '<span class="due-badge due-soon">Not started</span><div class="ns-main"><strong>Start with ' + escapeHtml(fc.name || "(unnamed contact)") + '</strong>' + (fc.title ? ' · ' + escapeHtml(fc.title) : '') +
+          '<div class="ns-sub">' + escapeHtml(nextTouch(fc) ? touchShort(fc, nextTouch(fc)) : "") + '</div></div>' +
+          (readOnly ? "" : '<button type="button" class="btn btn-primary" data-action="crm-log" data-id="' + l.id + '" data-cid="' + fc.id + '">Log touch 1</button>');
+      } else {
+        nextHtml = '<div class="ns-main"><strong>' + ((l.contacts || []).length ? 'No follow-up scheduled' : 'No contacts yet') + '</strong><div class="ns-sub">' +
+          ((l.contacts || []).length ? 'Log a touch, or set a follow-up date on a contact below.' : 'Add the person you will reach out to first.') + '</div></div>';
+      }
+    }
+
+    // Company and roles
+    var profile = cardMore ? (l.companyProfile || "—") : (shortText(l.companyProfile, 230) || "—");
+    var fit = cardMore ? (l.nearshoreFit || "—") : shortText(l.nearshoreFit, 200);
+    var skills = cardMore ? (l.requiredSkills || "") : shortText(l.requiredSkills, 140);
+    var hasMore = (l.companyProfile || "").length > 230 || (l.nearshoreFit || "").length > 200 || (l.requiredSkills || "").length > 140;
+    var rd = daysSince(l.datePosted);
+    var company = '' +
+      '<section class="cc-sec"><h3>Company</h3>' +
+        '<p class="cc-text">' + escapeHtml(profile) + '</p>' +
+        '<div class="cc-facts">' +
+          (l.estSize ? '<span><em>Size</em> ' + escapeHtml(shortText(l.estSize, 60)) + '</span>' : '') +
+          (l.endClient ? '<span><em>End client</em> ' + escapeHtml(l.endClient) + '</span>' : '') +
+        '</div>' +
+        (fit ? '<h4>Nearshore fit</h4><p class="cc-text">' + escapeHtml(fit) + '</p>' : '') +
+        (hasMore ? '<button type="button" class="btn-link" data-action="card-more">' + (cardMore ? 'Show less' : 'Show full details') + '</button>' : '') +
+      '</section>' +
+      '<section class="cc-sec"><h3>Open role</h3>' +
+        '<div class="role-line"><strong>' + escapeHtml(l.jobTitle || "—") + '</strong>' + (l.roleType ? '<span class="role-tag">' + escapeHtml(l.roleType) + '</span>' : '') + '</div>' +
+        '<div class="cc-facts">' +
+          (l.employmentType ? '<span>' + escapeHtml(l.employmentType) + '</span>' : '') +
+          (rd !== null ? '<span>Posted ' + rd + 'd ago</span>' : '') +
+        '</div>' +
+        (skills ? '<p class="cc-text">' + escapeHtml(skills) + '</p>' : '') +
+        '<div class="links">' +
+          (l.jobUrl ? '<a href="' + escapeHtml(l.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') +
+          (l.website ? '<a href="' + escapeHtml(l.website) + '" target="_blank" rel="noopener">Company site ↗</a>' : '') +
+        '</div>' +
+      '</section>';
+
+    var isWon = l.status === "Won";
+    inClientCard = true;
+    var people;
+    try { people = renderContactsPanel(l).replace('<h4>Contacts</h4>', ''); } finally { inClientCard = false; }
+    return '' +
+      '<div class="client-card">' +
+        '<div class="cc-back"><button type="button" class="btn btn-sm" data-action="crm-back">← All prospects</button>' +
+          (readOnly ? "" : '<button type="button" class="btn-link" data-action="crm-remove" data-id="' + l.id + '">Remove from CRM</button>') + '</div>' +
+        '<header class="cc-head">' +
+          '<div><h2>' + escapeHtml(l.company) + '</h2><div class="cc-sub">Saved ' + fmtDate(l.crmSavedAt) + (l.estSize ? ' · ' + escapeHtml(shortText(l.estSize, 40)) : '') + '</div></div>' +
+        '</header>' +
+        '<div class="cc-controls">' +
+          '<div class="cc-ctl"><div class="cc-lbl">Status</div><div class="seg-wrap">' + statusHtml + '</div></div>' +
+          '<div class="cc-ctl"><div class="cc-lbl">Priority</div>' + prioHtml + '</div>' +
+        '</div>' +
+        '<div class="cc-next"><div class="cc-lbl">Next step</div><div class="ns-row">' + nextHtml + '</div></div>' +
+        '<div class="cc-grid">' +
+          '<div class="cc-main">' +
+            '<section class="cc-sec"><h3>People &amp; outreach plan</h3>' + people + '</section>' +
+            renderTimeline(l) +
+          '</div>' +
+          '<aside class="cc-side">' + company +
+            '<section class="cc-sec"><h3>Client info</h3>' + renderClientInfoPanel(l).replace('<h4>Client info</h4>', '') + '</section>' +
+            '<section class="cc-sec"><h3>Documents</h3>' + renderDocumentsPanel(l).replace('<h4>Documents</h4>', '') + '</section>' +
+          '</aside>' +
+        '</div>' +
+        (isWon ? '<section class="cc-sec cc-wide">' + renderCandidatesPanel(l) + '</section>' : '') +
+      '</div>';
   }
 
   function renderCrmModal() {
@@ -1357,7 +1662,7 @@
       '</div>' +
       (readOnly ? '<div class="readonly-note">This view is read-only — open the artifact in claude.ai as its owner to edit statuses, notes, and contacts.</div>' : '') +
       renderViewTabs() +
-      (view === "crm" ? renderCrm() : view === "playbook" ? renderPlaybook() : (
+      (view === "pipeline" ? renderCrm() : view === "crm" ? renderClients() : view === "playbook" ? renderPlaybook() : (
       renderNewBanner() +
       renderStats() +
       renderFollowUps() +
@@ -1368,7 +1673,7 @@
       renderTable() +
       '<p class="help" style="margin-top:14px">New roles are found automatically by a daily scan and appear here with the NEW tag — use ↻ Refresh to load the latest. To change which roles are searched, edit the Tracking list above.</p>'
       )) +
-      (view === "crm" ? renderCrmModal() : "");
+      ((view === "pipeline" || view === "crm") ? renderCrmModal() : "");
     document.getElementById("app").innerHTML = html;
   }
 
@@ -1455,6 +1760,7 @@
     if (!l) return;
     l.contacts.push({ id: "c" + Date.now().toString(36), name: "", title: "", email: "", phone: "", linkedin: "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", sequenceStep: 0, isPrimary: false, activities: [] });
     var newId = l.contacts[l.contacts.length - 1].id;
+    ctOpen[newId] = true;
     persist();
     var box = document.querySelector('.ct-name-input[data-cid="' + newId + '"]');
     if (box) box.focus();
@@ -1859,7 +2165,17 @@
       render();
       return;
     }
-    if (action === "goto-lead") { gotoLead(id); return; }
+    if (action === "goto-lead") { var gl = findLead(id); if (gl && gl.inCrm) { openClient(id); } else { gotoLead(id); } return; }
+    if (action === "crm-save") { saveToCrm(id); return; }
+    if (action === "crm-remove") { removeFromCrm(id); return; }
+    if (action === "crm-open") { openClient(id); return; }
+    if (action === "crm-back") { closeClient(); return; }
+    if (action === "crm-filter") { crmFilter = t.getAttribute("data-value"); render(); return; }
+    if (action === "card-more") { cardMore = !cardMore; render(); return; }
+    if (action === "ct-toggle") { if (ctOpen[cid]) { delete ctOpen[cid]; } else { ctOpen[cid] = true; } render(); return; }
+    if (action === "tl-more") { tlLimit += 12; render(); return; }
+    if (action === "card-status") { setStatus(id, t.getAttribute("data-value")); return; }
+    if (action === "card-priority") { setPriority(id, t.getAttribute("data-value")); return; }
     if (action === "show-more") { showMore(); return; }
     if (action === "mark-all-seen") { markAllSeen(); return; }
     if (action === "add-note") { addNote(id); return; }
@@ -1982,6 +2298,13 @@
       if (ci) { ci.focus(); ci.setSelectionRange(ci.value.length, ci.value.length); }
       return;
     }
+    if (e.target.getAttribute("data-action") === "client-search") {
+      clientQuery = e.target.value;
+      render();
+      var ci2 = document.querySelector('input[data-action="client-search"]');
+      if (ci2) { ci2.focus(); ci2.setSelectionRange(ci2.value.length, ci2.value.length); }
+      return;
+    }
     if (e.target.getAttribute("data-action") === "pb-draft") { pbDraft.body = e.target.value; return; }
     if (e.target.getAttribute("data-action") === "af-field" && activityForm) {
       activityForm[e.target.getAttribute("data-field")] = e.target.value;
@@ -1997,7 +2320,7 @@
   });
 
   document.getElementById("app").addEventListener("keydown", function (e) {
-    if (e.key === "Escape" && view === "crm" && activityForm) { activityForm = null; render(); return; }
+    if (e.key === "Escape" && (view === "pipeline" || view === "crm") && activityForm) { activityForm = null; render(); return; }
     if (e.key !== "Enter") return;
     var id = e.target.id;
     if (id === "cap-role-name") { e.preventDefault(); addRoleType(); }
@@ -2059,6 +2382,16 @@
         '<div class="empty">Couldn\'t load data from the server: ' + escapeHtml(err.message) + '. Is the API running and DATABASE_URL configured?</div>';
     });
   }
+
+  window.addEventListener("popstate", function () {
+    var parts = (window.location.hash || "").replace(/^#/, "").split("/");
+    var next = VIEWS.indexOf(parts[0]) !== -1 ? parts[0] : "leads";
+    activityForm = null;
+    stopDictation();
+    view = next;
+    crmLeadId = next === "crm" && parts[1] ? decodeURIComponent(parts[1]) : null;
+    if (state.leads.length) render();
+  });
 
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "visible" && state.leads.length) refreshData(true);

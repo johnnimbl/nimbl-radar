@@ -187,3 +187,7 @@ $b$Frame it as extending their own team with a dedicated hire, not handing the p
 ('obj-badexp','objection','We tried it before and it went badly',
 $b$Ask what went wrong: the vetting, the time zone, the communication, the contract? Then show how your process differs on that exact point. Do not defend nearshoring in general.$b$, now() + interval '8 seconds')
 on conflict (id) do nothing;
+
+-- CRM tab: a lead you have saved as a good prospect (gets its own full-page client card).
+alter table leads add column if not exists in_crm boolean not null default false;
+alter table leads add column if not exists crm_saved_at date;

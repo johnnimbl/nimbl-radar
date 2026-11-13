@@ -86,6 +86,8 @@ async function getState(pool) {
     nearshoreFit: l.nearshore_fit || "",
     status: l.status,
     isNew: l.is_new,
+    inCrm: !!l.in_crm,
+    crmSavedAt: dateOrEmpty(l.crm_saved_at),
     clientInfo: l.client_info || emptyClientInfo(),
     contacts: (contactsByLead[l.id] || []).map((c) => ({
       id: c.id, name: c.name || "", title: c.title || "", email: c.email || "",
@@ -147,21 +149,23 @@ async function putState(pool, state) {
       await client.query(
         `insert into leads (id, company, website, role_type, job_title, job_url, date_posted, date_added,
            employment_type, est_size, priority, end_client, company_profile, required_skills, nearshore_fit,
-           status, is_new, client_info, updated_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())
+           status, is_new, client_info, in_crm, crm_saved_at, updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, coalesce($19::boolean, false), $20::date, now())
          on conflict (id) do update set
            company=excluded.company, website=excluded.website, role_type=excluded.role_type,
            job_title=excluded.job_title, job_url=excluded.job_url, date_posted=excluded.date_posted,
            date_added=excluded.date_added, employment_type=excluded.employment_type, est_size=excluded.est_size,
            priority=excluded.priority, end_client=excluded.end_client, company_profile=excluded.company_profile,
            required_skills=excluded.required_skills, nearshore_fit=excluded.nearshore_fit, status=excluded.status,
-           is_new=excluded.is_new, client_info=excluded.client_info, updated_at=now()`,
+           is_new=excluded.is_new, client_info=excluded.client_info,
+           in_crm=coalesce($19::boolean, leads.in_crm), crm_saved_at=coalesce($20::date, leads.crm_saved_at), updated_at=now()`,
         [
           l.id, l.company, l.website || "", l.roleType || "", l.jobTitle || "", l.jobUrl || "",
           dateOrNull(l.datePosted), dateOrNull(l.dateAdded) || new Date().toISOString().slice(0, 10),
           l.employmentType || "", l.estSize || "", l.priority || "Medium", l.endClient || "",
           l.companyProfile || "", l.requiredSkills || "", l.nearshoreFit || "", l.status || "Not Started",
           !!l.isNew, JSON.stringify(l.clientInfo || emptyClientInfo()),
+          typeof l.inCrm === "boolean" ? l.inCrm : null, dateOrNull(l.crmSavedAt),
         ]
       );
 
