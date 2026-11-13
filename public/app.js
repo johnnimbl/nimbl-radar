@@ -530,7 +530,7 @@
         '<div class="stat' + (nn > 0 ? " stat-highlight" : "") + '"><div class="num mono">' + nn + '</div><div class="lbl">New roles found</div></div>' +
         '<div class="stat"><div class="num mono">' + highPriorityCount() + '</div><div class="lbl">High priority</div></div>' +
         '<div class="stat"><div class="num mono">' + activeOutreachCount() + '</div><div class="lbl">In active outreach</div></div>' +
-        '<div class="stat' + (dueNowCount() > 0 ? " stat-highlight" : "") + '"><div class="num mono">' + dueNowCount() + '</div><div class="lbl">Follow-ups due</div></div>' +
+        '<div class="stat stat-link' + (dueNowCount() > 0 ? " stat-highlight" : "") + '" role="button" tabindex="0" title="Open the Pipeline tab" data-action="set-view" data-view="pipeline"><div class="num mono">' + dueNowCount() + '</div><div class="lbl">Follow-ups due</div></div>' +
       '</div>';
   }
 
@@ -568,29 +568,39 @@
       '</div>';
   }
 
+  // Leads tab: a light summary only. The full list lives on the Pipeline tab.
+  // Shows cards just for what is due today or overdue (max 3); otherwise one line.
+  var FOLLOWUPS_ON_LEADS = 3;
   function renderFollowUps() {
-    var all = allFollowUps().filter(function (f) { return f.days <= FOLLOWUP_WINDOW_DAYS; });
-    var shown = all.slice(0, 8);
-    var body;
-    if (shown.length) {
-      body = shown.map(function (f) {
-        var c = f.contact;
-        var who = c.name || "(unnamed contact)";
-        return '' +
-          '<div class="fu-card ' + dueClass(f.days) + '" data-action="goto-lead" data-id="' + f.lead.id + '">' +
-            '<span class="due-badge ' + dueClass(f.days) + '">' + dueLabel(f.days) + '</span>' +
-            '<div class="pc-main"><div class="nm">' + escapeHtml(who) + ' <span class="fu-co">· ' + escapeHtml(f.lead.company) + '</span></div>' +
-            '<div class="rt">' + escapeHtml(c.title || "") + (c.title ? " · " : "") + escapeHtml(c.stage || "Not contacted") + ' · follow up ' + fmtDate(c.nextFollowUp) + '</div></div>' +
-            (readOnly ? "" : '<button class="btn btn-sm" type="button" data-action="followup-log" data-id="' + f.lead.id + '" data-cid="' + c.id + '">Log activity</button>') +
-          '</div>';
-      }).join("");
-      if (all.length > shown.length) body += '<div class="help">+ ' + (all.length - shown.length) + ' more in the next ' + FOLLOWUP_WINDOW_DAYS + ' days — open a company to see them.</div>';
-    } else {
-      var nc = notContactedCount();
-      body = '<div class="priority-empty">Nothing due in the next ' + FOLLOWUP_WINDOW_DAYS + ' days. Log an activity on a contact and set a next follow-up date to see it here.' +
-        (nc > 0 ? ' ' + nc + ' saved contact' + (nc === 1 ? " hasn't" : "s haven't") + ' been contacted yet.' : '') + '</div>';
+    var all = allFollowUps();
+    var due = all.filter(function (f) { return f.days <= 0; });
+    var upcoming = all.filter(function (f) { return f.days > 0 && f.days <= FOLLOWUP_WINDOW_DAYS; });
+    var link = '<button class="btn-link" type="button" data-action="set-view" data-view="pipeline">Open Pipeline →</button>';
+    if (!due.length) {
+      var line;
+      if (upcoming.length) {
+        var n = upcoming[0];
+        line = 'Nothing due today. Next: <strong>' + escapeHtml(n.contact.name || "(unnamed contact)") + '</strong> · ' + escapeHtml(n.lead.company) + ', ' + (n.days === 1 ? 'tomorrow' : 'in ' + n.days + ' days') +
+          (upcoming.length > 1 ? ' · ' + (upcoming.length - 1) + ' more this week' : '') + '.';
+      } else {
+        line = 'Nothing due in the next ' + FOLLOWUP_WINDOW_DAYS + ' days.';
+      }
+      return '<div class="fu-line"><span>' + line + '</span>' + link + '</div>';
     }
-    return '<div class="priorities followups"><h3>Follow-ups due <button class="btn-link" type="button" data-action="set-view" data-view="pipeline" style="margin-left:8px">Open Pipeline →</button></h3><div class="priority-list">' + body + '</div></div>';
+    var shown = due.slice(0, FOLLOWUPS_ON_LEADS);
+    var body = shown.map(function (f) {
+      var c = f.contact;
+      var who = c.name || "(unnamed contact)";
+      return '' +
+        '<div class="fu-card ' + dueClass(f.days) + '" data-action="goto-lead" data-id="' + f.lead.id + '">' +
+          '<span class="due-badge ' + dueClass(f.days) + '">' + dueLabel(f.days) + '</span>' +
+          '<div class="pc-main"><div class="nm">' + escapeHtml(who) + ' <span class="fu-co">· ' + escapeHtml(f.lead.company) + '</span></div>' +
+          '<div class="rt">' + escapeHtml(c.title || "") + (c.title ? " · " : "") + escapeHtml(c.stage || "Not contacted") + '</div></div>' +
+          (readOnly ? "" : '<button class="btn btn-sm" type="button" data-action="followup-log" data-id="' + f.lead.id + '" data-cid="' + c.id + '">Log activity</button>') +
+        '</div>';
+    }).join("");
+    if (due.length > shown.length) body += '<div class="help">+ ' + (due.length - shown.length) + ' more due on the Pipeline tab.</div>';
+    return '<div class="priorities followups"><h3>Due now ' + link + '</h3><div class="priority-list">' + body + '</div></div>';
   }
 
   function renderPriorities() {
@@ -2944,6 +2954,7 @@
   document.getElementById("app").addEventListener("keydown", function (e) {
     if (e.key === "Escape" && (view === "pipeline" || view === "crm") && activityForm) { activityForm = null; render(); return; }
     if (e.key !== "Enter") return;
+    if (e.target.classList && e.target.classList.contains("stat-link")) { e.preventDefault(); e.target.click(); return; }
     var id = e.target.id;
     if (id === "cap-role-name") { e.preventDefault(); addRoleType(); }
     else if (id === "ql-url" || id === "ql-company") { e.preventDefault(); quickAdd(); }

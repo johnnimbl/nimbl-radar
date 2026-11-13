@@ -541,3 +541,11 @@ input.ct-name-input:focus,input.ct-name-input:hover{border-color:var(--ink);back
 .closed-leads .sec-head h3{display:flex;align-items:center;gap:8px;font-size:.95rem;color:var(--ink-soft);}
 .table-closed{opacity:.8;}
 .table-closed tr.lead-row:hover{opacity:1;}
+
+/* Leads tab: compact follow-up summary */
+.fu-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;margin:0 0 20px;padding:10px 14px;border:1px solid var(--line, var(--ink));border-radius:10px;background:var(--surface);font-size:.86rem;color:var(--ink-soft);}
+.fu-line strong{color:var(--ink);}
+.followups h3 .btn-link{margin-left:8px;}
+.stat-link{cursor:pointer;}
+.stat-link:hover{background:var(--surface-2);}
+.stat-link:focus-visible{outline:2px solid var(--ink);outline-offset:-4px;}
