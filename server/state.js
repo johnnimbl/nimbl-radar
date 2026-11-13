@@ -52,6 +52,10 @@ async function getState(pool) {
   const candsRes = leadIds.length
     ? await pool.query("select * from candidates where lead_id = any($1) order by sort_order, id", [leadIds])
     : { rows: [] };
+  const alertsRes = leadIds.length
+    ? await pool.query("select * from role_alerts where lead_id = any($1) order by found_at desc, id", [leadIds])
+    : { rows: [] };
+  const alertsByLead = groupBy(alertsRes.rows, "lead_id");
   const candIds = candsRes.rows.map((r) => r.id);
   const candNotesRes = candIds.length
     ? await pool.query("select * from candidate_notes where candidate_id = any($1) order by sort_order, id", [candIds])
@@ -89,6 +93,11 @@ async function getState(pool) {
     inCrm: !!l.in_crm,
     crmSavedAt: dateOrEmpty(l.crm_saved_at),
     clientInfo: l.client_info || emptyClientInfo(),
+    roleAlerts: (alertsByLead[l.id] || []).map((a) => ({
+      id: a.id, roleType: a.role_type || "", jobTitle: a.job_title || "", jobUrl: a.job_url || "",
+      datePosted: dateOrEmpty(a.date_posted), note: a.note || "",
+      foundAt: a.found_at.toISOString().slice(0, 10), seen: !!a.seen_at,
+    })),
     contacts: (contactsByLead[l.id] || []).map((c) => ({
       id: c.id, name: c.name || "", title: c.title || "", email: c.email || "",
       phone: c.phone || "", linkedin: c.linkedin || "", roles: c.roles || [],

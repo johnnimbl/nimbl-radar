@@ -178,6 +178,27 @@ app.delete("/api/files/:id", ensureAuthenticated, async (req, res) => {
   }
 });
 
+// --- New-role alerts (written by the daily scan for companies in the CRM) ------
+app.post("/api/role-alerts/:id/seen", ensureAuthenticated, async (req, res) => {
+  try {
+    await pool.query("update role_alerts set seen_at = coalesce(seen_at, now()) where id = $1", [String(req.params.id)]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update the alert." });
+  }
+});
+
+app.post("/api/leads/:id/role-alerts/seen", ensureAuthenticated, async (req, res) => {
+  try {
+    await pool.query("update role_alerts set seen_at = now() where lead_id = $1 and seen_at is null", [String(req.params.id)]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update the alerts." });
+  }
+});
+
 // Oversized uploads are rejected by the body parser before the route runs.
 app.use((err, req, res, next) => {
   if (err && err.type === "entity.too.large" && req.path.startsWith("/api/")) {

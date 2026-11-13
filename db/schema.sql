@@ -209,3 +209,20 @@ create table if not exists files (
 alter table files alter column data set storage external;
 create index if not exists files_lead_id_idx on files(lead_id);
 alter table files enable row level security;
+
+-- New openings the daily scan finds at a company already saved to the CRM. Shown as an alert
+-- on the CRM tab and the client card until marked as seen. One row per posting URL.
+create table if not exists role_alerts (
+  id text primary key default gen_random_uuid()::text,
+  lead_id text not null references leads(id) on delete cascade,
+  role_type text not null default '',
+  job_title text not null default '',
+  job_url text not null default '',
+  date_posted date,
+  note text not null default '',
+  found_at timestamptz not null default now(),
+  seen_at timestamptz,
+  unique (lead_id, job_url)
+);
+create index if not exists role_alerts_lead_id_idx on role_alerts(lead_id);
+alter table role_alerts enable row level security;

@@ -149,26 +149,23 @@
     o[parts[parts.length - 1]] = value;
   }
 
+  // The Leads tab is for prospecting: companies saved to the CRM live in the CRM tab instead.
+  function prospectLeads() { return state.leads.filter(function (l) { return !l.inCrm; }); }
+
   function newRolesCount() {
-    var n = 0;
-    for (var i = 0; i < state.leads.length; i++) if (state.leads[i].isNew) n++;
-    return n;
+    return prospectLeads().filter(function (l) { return l.isNew; }).length;
   }
 
   function activeOutreachCount() {
-    var n = 0;
-    for (var i = 0; i < state.leads.length; i++) if (ACTIVE_STATUSES.indexOf(state.leads[i].status) !== -1) n++;
-    return n;
+    return prospectLeads().filter(function (l) { return ACTIVE_STATUSES.indexOf(l.status) !== -1; }).length;
   }
 
   function highPriorityCount() {
-    var n = 0;
-    for (var i = 0; i < state.leads.length; i++) if (state.leads[i].priority === "High") n++;
-    return n;
+    return prospectLeads().filter(function (l) { return l.priority === "High"; }).length;
   }
 
   function filteredLeads() {
-    return state.leads.filter(function (l) {
+    return prospectLeads().filter(function (l) {
       if (filters.roleType !== "All" && l.roleType !== filters.roleType) return false;
       if (filters.priority !== "All" && l.priority !== filters.priority) return false;
       if (filters.status !== "All" && l.status !== filters.status) return false;
@@ -181,7 +178,7 @@
   }
 
   function priorityLeads() {
-    return state.leads.filter(function (l) {
+    return prospectLeads().filter(function (l) {
       return DEAD_STATUSES.indexOf(l.status) === -1 && l.status !== "Won";
     }).sort(function (a, b) {
       var pr = priorityRank(a.priority) - priorityRank(b.priority);
@@ -500,7 +497,7 @@
     var nn = newRolesCount();
     return '' +
       '<div class="stats">' +
-        '<div class="stat"><div class="num mono">' + state.leads.length + '</div><div class="lbl">Total leads</div></div>' +
+        '<div class="stat"><div class="num mono">' + prospectLeads().length + '</div><div class="lbl">Leads to work</div></div>' +
         '<div class="stat' + (nn > 0 ? " stat-highlight" : "") + '"><div class="num mono">' + nn + '</div><div class="lbl">New roles found</div></div>' +
         '<div class="stat"><div class="num mono">' + highPriorityCount() + '</div><div class="lbl">High priority</div></div>' +
         '<div class="stat"><div class="num mono">' + activeOutreachCount() + '</div><div class="lbl">In active outreach</div></div>' +
@@ -1033,7 +1030,7 @@
     var rows = '' +
       '<tr class="lead-row" data-expanded="' + expanded + '" data-action="toggle-row" data-id="' + l.id + '">' +
         '<td>' + (l.isNew ? '<span class="newtag">NEW</span>' : '<svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>') + '</td>' +
-        '<td><div class="company-cell"><div><div class="nm">' + escapeHtml(l.company) + (l.status === "Won" ? '<span class="client-badge">Client</span>' : '') + (l.inCrm ? '<span class="incrm-badge" title="Saved to your CRM">In CRM</span>' : '') + (leadDueCount(l) > 0 ? '<span class="due-badge due-today" style="margin-left:6px">Follow-up due</span>' : '') + '</div><span class="role-tag">' + escapeHtml(l.jobTitle) + '</span></div></div></td>' +
+        '<td><div class="company-cell"><div><div class="nm">' + escapeHtml(l.company) + (l.status === "Won" ? '<span class="client-badge">Client</span>' : '') +  (leadDueCount(l) > 0 ? '<span class="due-badge due-today" style="margin-left:6px">Follow-up due</span>' : '') + '</div><span class="role-tag">' + escapeHtml(l.jobTitle) + '</span></div></div></td>' +
         '<td>' + escapeHtml(l.roleType) + '</td>' +
         '<td><span class="pill ' + priorityClass(l.priority) + '">' + l.priority + '</span></td>' +
         '<td class="mono">' + escapeHtml(l.estSize) + '</td>' +
@@ -1046,10 +1043,22 @@
     return rows;
   }
 
+  function renderCrmHiddenNote() {
+    var saved = crmLeads();
+    if (!saved.length) return "";
+    var q = (filters.q || "").trim().toLowerCase();
+    var hits = q ? saved.filter(function (l) { return (l.company + " " + l.jobTitle + " " + l.requiredSkills).toLowerCase().indexOf(q) !== -1; }) : [];
+    var hitHtml = hits.length ? ' In your CRM: ' + hits.slice(0, 6).map(function (l) {
+      return '<button type="button" class="btn-link" data-action="crm-open" data-id="' + l.id + '">' + escapeHtml(l.company) + ' →</button>';
+    }).join(" ") : "";
+    return '<p class="crm-hidden-note">' + saved.length + (saved.length === 1 ? ' company is' : ' companies are') +
+      ' in your CRM and not listed here. <button type="button" class="btn-link" data-action="set-view" data-view="crm">Open CRM</button>' + hitHtml + '</p>';
+  }
+
   function renderTable() {
     var all = filteredLeads();
     if (all.length === 0) {
-      return '<div class="table-wrap"><div class="empty">No leads match these filters.</div></div>';
+      return '<div class="table-wrap"><div class="empty">No leads match these filters.</div></div>' + renderCrmHiddenNote();
     }
     var leads = all.slice(0, pageSize);
     var rows = leads.map(renderRow).join("");
@@ -1061,7 +1070,7 @@
         '</tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
       '</table></div>' +
-      (remaining > 0 ? '<div class="show-more-wrap"><button class="btn" type="button" data-action="show-more">Show more (' + remaining + ' more)</button></div>' : '');
+      (remaining > 0 ? '<div class="show-more-wrap"><button class="btn" type="button" data-action="show-more">Show more (' + remaining + ' more)</button></div>' : '') + renderCrmHiddenNote();
   }
 
   function renderAddForm() {
@@ -1106,7 +1115,7 @@
     return '<div class="viewtabs" role="tablist">' +
       tab("leads", "Leads", count(fresh, fresh === 1 ? "new lead" : "new leads")) +
       tab("pipeline", "Pipeline", count(overdue, overdue === 1 ? "overdue follow-up" : "overdue follow-ups")) +
-      tab("crm", "CRM") + tab("playbook", "Playbook") + '</div>';
+      tab("crm", "CRM", count(crmAlertCount(), crmAlertCount() === 1 ? "new role at a CRM company" : "new roles at CRM companies")) + tab("playbook", "Playbook") + '</div>';
   }
 
   function crmContacts() {
@@ -1288,6 +1297,39 @@
 
   function crmLeads() { return state.leads.filter(function (l) { return l.inCrm; }); }
 
+  // New openings the daily scan found at a company that is already in the CRM.
+  function unseenAlerts(l) { return (l.roleAlerts || []).filter(function (a) { return !a.seen; }); }
+  function crmAlertCount() {
+    return crmLeads().reduce(function (n, l) { return n + unseenAlerts(l).length; }, 0);
+  }
+
+  function markAlertsSeen(leadId, alertId) {
+    var l = findLead(leadId);
+    if (!l) return;
+    (l.roleAlerts || []).forEach(function (a) { if (!alertId || a.id === alertId) a.seen = true; });
+    render();
+    var url = alertId ? "/api/role-alerts/" + encodeURIComponent(alertId) + "/seen" : "/api/leads/" + encodeURIComponent(leadId) + "/role-alerts/seen";
+    fetch(url, { method: "POST" }).then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+    }).catch(function (err) {
+      toast("Couldn't update the alert: " + (err && err.message ? err.message : "unknown error"));
+    });
+  }
+
+  function renderAlertLine(l, a, withButton) {
+    var rd = a.datePosted ? daysSince(a.datePosted) : null;
+    return '<div class="ra-item">' +
+      '<div class="ra-main"><strong>' + escapeHtml(a.jobTitle || a.roleType || "New opening") + '</strong>' +
+        (a.roleType ? '<span class="role-tag">' + escapeHtml(a.roleType) + '</span>' : '') +
+        '<div class="ra-meta">' + (rd !== null ? 'Posted ' + rd + 'd ago · ' : '') + 'found ' + fmtDate(a.foundAt) +
+          (a.jobUrl ? ' · <a href="' + escapeHtml(a.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') + '</div>' +
+        (a.note ? '<div class="ra-note">' + escapeHtml(a.note) + '</div>' : '') +
+      '</div>' +
+      (withButton && !readOnly ? '<button type="button" class="btn btn-sm" data-action="alert-seen" data-id="' + l.id + '" data-aid="' + escapeHtml(a.id) + '">Mark as seen</button>' : '') +
+    '</div>';
+  }
+
   function crmGroupOf(l) {
     if (l.status === "Won") return "Clients";
     if (DEAD_STATUSES.indexOf(l.status) !== -1) return "Closed";
@@ -1325,7 +1367,8 @@
     l.inCrm = true;
     l.crmSavedAt = todayStr();
     persist();
-    toast(l.company + " saved to your CRM.");
+    if (expandedId === id) expandedId = null;
+    toast(l.company + " moved to your CRM. Find it in the CRM tab.");
   }
 
   function removeFromCrm(id) {
@@ -1389,6 +1432,7 @@
     return '' +
       '<button type="button" class="cl-card" data-action="crm-open" data-id="' + l.id + '">' +
         '<span class="cl-top"><span class="cl-name">' + escapeHtml(l.company) + '</span><span class="pill ' + priorityClass(l.priority) + '">' + l.priority + '</span></span>' +
+        (unseenAlerts(l).length ? '<span class="ra-chip">● ' + unseenAlerts(l).length + ' new role' + (unseenAlerts(l).length === 1 ? '' : 's') + ' posted</span>' : '') +
         '<span class="cl-role">' + escapeHtml(l.jobTitle || l.roleType || "") + '</span>' +
         '<span class="cl-row"><span class="pill status-pill ' + statusClass(l.status) + '">' + escapeHtml(l.status) + '</span>' +
           '<span class="cl-dots" title="Outreach plan: ' + step + ' of ' + SEQUENCE.length + ' touches">' + dots + '</span></span>' +
@@ -1413,6 +1457,8 @@
       return !q || (l.company + " " + (l.jobTitle || "") + " " + (l.roleType || "")).toLowerCase().indexOf(q) !== -1;
     });
     list.sort(function (a, b) {
+      var aa = unseenAlerts(a).length ? 0 : 1, ab = unseenAlerts(b).length ? 0 : 1;
+      if (aa !== ab) return aa - ab;
       var na = leadNextStep(a), nb = leadNextStep(b);
       var da = na ? na.days : 9999, db = nb ? nb.days : 9999;
       return da - db || priorityRank(a.priority) - priorityRank(b.priority) || a.company.localeCompare(b.company);
@@ -1437,7 +1483,10 @@
     } else {
       body = '<div class="cl-grid">' + list.map(renderClientListCard).join("") + '</div>';
     }
-    return stats +
+    var alerted = all.filter(function (l) { return unseenAlerts(l).length; });
+    var alertBanner = alerted.length ? '<div class="ra-banner"><strong>New openings at ' + alerted.length + (alerted.length === 1 ? ' company' : ' companies') + ' in your CRM.</strong> A fresh role is a good reason to get back in touch. ' +
+      alerted.map(function (l) { return '<button type="button" class="btn-link" data-action="crm-open" data-id="' + l.id + '">' + escapeHtml(l.company) + ' →</button>'; }).join(" ") + '</div>' : '';
+    return stats + alertBanner +
       '<div class="crm-toolbar cl-toolbar">' +
         '<div class="chipset">' + chips + '</div>' +
         '<div class="search crm-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
@@ -1517,7 +1566,8 @@
         (fit ? '<h4>Nearshore fit</h4><p class="cc-text">' + escapeHtml(fit) + '</p>' : '') +
         (hasMore ? '<button type="button" class="btn-link" data-action="card-more">' + (cardMore ? 'Show less' : 'Show full details') + '</button>' : '') +
       '</section>' +
-      '<section class="cc-sec"><h3>Open role</h3>' +
+      '<section class="cc-sec"><h3>' + ((l.roleAlerts || []).length ? 'Roles' : 'Open role') + '</h3>' +
+        ((l.roleAlerts || []).length ? '<h4 style="margin-top:0">When you saved it</h4>' : '') +
         '<div class="role-line"><strong>' + escapeHtml(l.jobTitle || "—") + '</strong>' + (l.roleType ? '<span class="role-tag">' + escapeHtml(l.roleType) + '</span>' : '') + '</div>' +
         '<div class="cc-facts">' +
           (l.employmentType ? '<span>' + escapeHtml(l.employmentType) + '</span>' : '') +
@@ -1528,6 +1578,7 @@
           (l.jobUrl ? '<a href="' + escapeHtml(l.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') +
           (l.website ? '<a href="' + escapeHtml(l.website) + '" target="_blank" rel="noopener">Company site ↗</a>' : '') +
         '</div>' +
+        ((l.roleAlerts || []).length ? '<h4>Found since</h4><div class="ra-list">' + l.roleAlerts.map(function (a) { return renderAlertLine(l, a, false); }).join("") + '</div>' : '') +
       '</section>';
 
     var isWon = l.status === "Won";
@@ -1541,6 +1592,11 @@
         '<header class="cc-head">' +
           '<div><h2>' + escapeHtml(l.company) + '</h2><div class="cc-sub">Saved ' + fmtDate(l.crmSavedAt) + (l.estSize ? ' · ' + escapeHtml(shortText(l.estSize, 40)) : '') + '</div></div>' +
         '</header>' +
+        (unseenAlerts(l).length ? '<section class="ra-panel" aria-label="New roles posted">' +
+          '<div class="ra-head"><span class="cc-lbl">New role' + (unseenAlerts(l).length === 1 ? '' : 's') + ' posted since you saved this company</span>' +
+          (unseenAlerts(l).length > 1 && !readOnly ? '<button type="button" class="btn-link" data-action="alert-seen" data-id="' + l.id + '">Mark all as seen</button>' : '') + '</div>' +
+          unseenAlerts(l).map(function (a) { return renderAlertLine(l, a, true); }).join("") +
+        '</section>' : '') +
         '<div class="cc-controls">' +
           '<div class="cc-ctl"><div class="cc-lbl">Status</div><div class="seg-wrap">' + statusHtml + '</div></div>' +
           '<div class="cc-ctl"><div class="cc-lbl">Priority</div>' + prioHtml + '</div>' +
@@ -2209,6 +2265,8 @@
   }
 
   function gotoLead(id) {
+    var gl = findLead(id);
+    if (gl && gl.inCrm) { openClient(id); return; }
     if (view !== "leads") setView("leads");
     filters = { roleType: "All", priority: "All", status: "All", q: "" };
     expandedId = id;
@@ -2304,6 +2362,7 @@
       return;
     }
     if (action === "goto-lead") { var gl = findLead(id); if (gl && gl.inCrm) { openClient(id); } else { gotoLead(id); } return; }
+    if (action === "alert-seen") { markAlertsSeen(id, t.getAttribute("data-aid")); return; }
     if (action === "file-remove") { removeFile(t.getAttribute("data-fid")); return; }
     if (action === "crm-save") { saveToCrm(id); return; }
     if (action === "crm-remove") { removeFromCrm(id); return; }
@@ -2336,7 +2395,11 @@
       }
       return;
     }
-    if (action === "followup-log") { openActivityForm(id, cid); gotoLead(id); return; }
+    if (action === "followup-log") {
+      var fl = findLead(id);
+      if (fl && fl.inCrm) { openClient(id); openActivityForm(id, cid); render(); return; }
+      openActivityForm(id, cid); gotoLead(id); return;
+    }
     if (action === "pb-add-note") { pbAddNote(); return; }
     if (action === "pb-dictate") { toggleDictation(); return; }
     if (action === "pb-add") { pbAdd(t.getAttribute("data-kind")); return; }
