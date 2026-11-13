@@ -2,10 +2,10 @@
 // object the frontend (public/app.js) already works with. This mirrors the
 // "one document" model the original Claude Artifact prototype used, just
 // backed by real Postgres tables instead of an in-page blob — see the
-// schema in db/schema.sql. Every save replaces each lead's child rows
-// (notes/contacts/contact activities/documents/candidates) wholesale; simple and correct for a
-// CRM at this scale. If you outgrow that (heavy concurrent editing, a lot
-// of leads), split this into per-resource endpoints instead.
+// schema in db/schema.sql. A save replaces a lead's child rows
+// (notes/contacts/contact activities/documents/candidates) wholesale, but only for
+// leads whose content actually changed: the browser always sends every lead, and
+// rewriting all of them took hundreds of database round trips per save.
 
 const CONTACT_STAGES = ["Not contacted", "Connection sent", "Connected", "Message sent", "Replied", "Meeting booked", "Not interested", "No response"];
 const ACTIVITY_TYPES = ["LinkedIn connection", "LinkedIn message", "Email", "Call", "Meeting", "Note"];
@@ -146,7 +146,60 @@ function groupBy(rows, key) {
   return out;
 }
 
+// Canonical JSON (sorted keys) so jsonb key order never makes equal values look different.
+function canon(v) {
+  if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
+  if (v && typeof v === "object") {
+    return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
+  }
+  return JSON.stringify(v === undefined ? null : v);
+}
+
+function d10(d) {
+  return d ? String(d).slice(0, 10) : "";
+}
+
+// Exactly the values putState would write for a lead, in the shape getState reads them back.
+// Two leads with the same fingerprint produce identical rows, so the write can be skipped.
+// `current` supplies the stored in_crm / crm_saved_at when the payload leaves them out.
+function leadFingerprint(l, current) {
+  const arr = (x) => (Array.isArray(x) ? x : []);
+  return canon({
+    id: l.id, company: l.company, website: l.website || "", roleType: l.roleType || "", jobTitle: l.jobTitle || "",
+    jobUrl: l.jobUrl || "", datePosted: d10(l.datePosted), dateAdded: d10(l.dateAdded),
+    employmentType: l.employmentType || "", estSize: l.estSize || "", priority: l.priority || "Medium",
+    endClient: l.endClient || "", companyProfile: l.companyProfile || "", requiredSkills: l.requiredSkills || "",
+    nearshoreFit: l.nearshoreFit || "", status: l.status || "Not Started", isNew: !!l.isNew,
+    clientInfo: l.clientInfo || emptyClientInfo(),
+    inCrm: typeof l.inCrm === "boolean" ? l.inCrm : !!(current && current.inCrm),
+    crmSavedAt: d10(l.crmSavedAt) || (current ? d10(current.crmSavedAt) : ""),
+    notes: arr(l.notes).map((n) => [d10(n.date), n.text || ""]),
+    contacts: arr(l.contacts).map((c) => [
+      c.id, c.name || "", c.title || "", c.email || "", c.phone || "", c.linkedin || "", c.roles || [],
+      CONTACT_STAGES.includes(c.stage) ? c.stage : "Not contacted", d10(c.nextFollowUp), d10(c.lastContacted),
+      Math.min(5, Math.max(0, parseInt(c.sequenceStep, 10) || 0)), c.isPrimary === true,
+      arr(c.activities).map((a) => [
+        a.id, ACTIVITY_TYPES.includes(a.type) ? a.type : "Note",
+        ACTIVITY_DIRECTIONS.includes(a.direction) ? a.direction : "Outbound", d10(a.date), a.summary || "",
+      ]),
+    ]),
+    documents: arr(l.documents).map((d) => [d.id, d.name || ""]),
+    candidates: arr(l.candidates).map((c) => [
+      c.id, c.name || "", c.jobTitle || "", c.linkedin || "", c.email || "", c.phone || "", c.country || "",
+      c.stage || "Identified", c.contractor || emptyContractor(),
+      arr(c.notes).map((n) => [d10(n.date), n.text || ""]),
+      arr(c.documents).map((d) => [d.id, d.name || ""]),
+    ]),
+  });
+}
+
 async function putState(pool, state) {
+  // What is stored now, to skip leads that did not change. If reading fails, write everything.
+  let stored = null;
+  try { stored = await getState(pool); } catch (err) { console.error("putState: compare skipped", err.message); }
+  const storedById = {};
+  if (stored) for (const l of stored.leads) storedById[l.id] = l;
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -154,17 +207,23 @@ async function putState(pool, state) {
     // last_scanned is owned by the scanner: never let a (possibly stale) browser tab move it backwards.
     await client.query("update meta set last_scanned = greatest(last_scanned, $1::date) where id = 1", [dateOrNull(state.lastScanned)]);
 
-    await client.query("delete from role_types");
     const roleTypes = Array.isArray(state.roleTypes) ? state.roleTypes : [];
-    for (let i = 0; i < roleTypes.length; i++) {
-      await client.query("insert into role_types (name, sort_order) values ($1, $2)", [roleTypes[i], i]);
+    if (!stored || canon(stored.roleTypes) !== canon(roleTypes)) {
+      await client.query("delete from role_types");
+      for (let i = 0; i < roleTypes.length; i++) {
+        await client.query("insert into role_types (name, sort_order) values ($1, $2)", [roleTypes[i], i]);
+      }
     }
 
     const leads = Array.isArray(state.leads) ? state.leads : [];
     // Leads missing from the payload are NOT deleted: the app has no delete-lead action, and the daily
     // scan adds leads directly to the database, so a stale browser tab must never wipe them out.
 
+    let written = 0;
     for (const l of leads) {
+      const current = storedById[l.id];
+      if (current && leadFingerprint(l, current) === leadFingerprint(current, current)) continue;
+      written++;
       await client.query(
         `insert into leads (id, company, website, role_type, job_title, job_url, date_posted, date_added,
            employment_type, est_size, priority, end_client, company_profile, required_skills, nearshore_fit,
@@ -265,6 +324,7 @@ async function putState(pool, state) {
     }
 
     await client.query("COMMIT");
+    return { written, total: leads.length };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -273,4 +333,4 @@ async function putState(pool, state) {
   }
 }
 
-module.exports = { getState, putState };
+module.exports = { getState, putState, leadFingerprint };
