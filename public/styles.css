@@ -382,3 +382,22 @@ input.ct-name-input:focus,input.ct-name-input:hover{border-color:var(--ink);back
 .ct-summary{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:.78rem;color:var(--ink-soft);margin-top:8px;}
 .ct-summary > span{min-width:0;overflow-wrap:anywhere;}
 .client-card .contact-card .field-row:first-of-type{margin-top:10px;}
+
+/* ---------- Uploaded files ---------- */
+.file-list{display:flex;flex-direction:column;gap:6px;margin-bottom:8px;}
+.file-item{display:flex;align-items:center;gap:8px;min-width:0;border:1px solid var(--ink);border-radius:8px;padding:6px 8px 6px 6px;background:var(--surface);font-size:.8rem;}
+.file-ext{flex-shrink:0;min-width:38px;text-align:center;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.62rem;font-weight:700;letter-spacing:.03em;background:var(--yellow);border:1px solid var(--ink);border-radius:5px;padding:2px 4px;}
+.file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;}
+.file-owner{flex-shrink:0;max-width:34%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.68rem;font-weight:700;border:1px solid var(--teal);color:var(--teal);border-radius:999px;padding:1px 8px;}
+.file-meta{flex-shrink:0;font-size:.7rem;color:var(--ink-soft);white-space:nowrap;}
+.file-none{color:var(--ink-soft);margin:4px 0 8px;font-size:.82rem;}
+.file-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.file-hint{font-size:.7rem;color:var(--ink-soft);}
+.file-btn{position:relative;display:inline-flex;align-items:center;cursor:pointer;}
+.file-btn.is-busy{opacity:.65;cursor:progress;}
+.file-btn:focus-within{outline:2px solid var(--teal);outline-offset:2px;}
+.file-input{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip-path:inset(50%);pointer-events:none;}
+.ct-files{display:flex;flex-direction:column;align-items:flex-start;gap:6px;}
+.ct-files .file-item{align-self:stretch;}
+.doc-sub{font-size:.68rem;color:var(--ink-soft);font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin:14px 0 4px;}
+@media (max-width:560px){.file-meta{display:none;}}

@@ -43,6 +43,11 @@
   var crmLeadId = null;               // the prospect whose full client card is open (CRM tab), if any
   var clientQuery = "";               // CRM list search box
   var inClientCard = false;           // true while the full-page client card is being built (contact cards drop their own timeline)
+  var files = [];                     // metadata of uploaded files (the bytes stay on the server)
+  var uploading = {};                 // "leadId|contactId" -> number of uploads in flight
+  var filesPending = 0;               // uploads/deletes in flight; a refresh must not overwrite them
+  var FILE_EXTS = ["pdf", "png", "jpg", "jpeg", "webp", "gif", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv", "rtf"];
+  var FILE_MAX_BYTES = 10 * 1024 * 1024;
   var ctOpen = {};                    // client card: contact ids whose detail fields are expanded
   var crmFilter = "Active";           // CRM list filter: Active / Clients / Closed / All
   var cardMore = false;               // client card: show the full company text instead of the short version
@@ -693,6 +698,7 @@
           '</div>' +
           (formOpen ? renderActivityForm(l, c) : (readOnly ? "" : '<div><button class="btn btn-sm" type="button" data-action="open-activity-form" data-id="' + l.id + '" data-cid="' + c.id + '">+ Log activity</button></div>')) +
           (inClientCard ? "" : timeline) +
+          renderContactFiles(l, c) +
         '</div>' +
         (inClientCard ? renderContactSummary(l, c, detailsOpen) : "") +
         (detailsOpen ? (
@@ -717,6 +723,125 @@
     if (c.phone) bits.push(escapeHtml(c.phone));
     return '<div class="ct-summary"><span>' + (bits.length ? bits.join(' · ') : 'No title or contact details yet') + '</span>' +
       '<button type="button" class="btn-link" data-action="ct-toggle" data-cid="' + c.id + '" aria-expanded="' + (open ? "true" : "false") + '">' + (open ? "Hide details" : (readOnly ? "Show details" : "Edit details")) + '</button></div>';
+  }
+
+  /* ---------------- Uploaded files ---------------- */
+
+  function fmtSize(n) {
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+    if (n >= 1024) return Math.round(n / 1024) + " KB";
+    return n + " B";
+  }
+
+  function fileExt(name) { var m = /\.([A-Za-z0-9]{1,5})$/.exec(name || ""); return m ? m[1].toLowerCase() : ""; }
+
+  function leadFiles(leadId) { return files.filter(function (f) { return f.leadId === leadId; }); }
+  function contactFiles(leadId, cid) { return files.filter(function (f) { return f.leadId === leadId && f.contactId === cid; }); }
+
+  function renderFileItem(l, f, showOwner) {
+    var owner = "";
+    if (showOwner && f.contactId) {
+      var oc = findContact(l, f.contactId);
+      if (oc) owner = '<span class="file-owner">' + escapeHtml(oc.name || "(unnamed contact)") + '</span>';
+    }
+    return '<div class="file-item">' +
+      '<span class="file-ext">' + escapeHtml((f.ext || fileExt(f.name) || "file").toUpperCase()) + '</span>' +
+      '<a class="file-name" href="/api/files/' + encodeURIComponent(f.id) + '" target="_blank" rel="noopener">' + escapeHtml(f.name) + '</a>' +
+      owner +
+      '<span class="file-meta">' + fmtSize(f.size) + ' · ' + fmtDate((f.uploadedAt || "").slice(0, 10)) + '</span>' +
+      (readOnly ? "" : '<button type="button" class="act-del" data-action="file-remove" data-fid="' + escapeHtml(f.id) + '" aria-label="Delete file ' + escapeHtml(f.name) + '">✕</button>') +
+    '</div>';
+  }
+
+  function renderUploadButton(l, cid, label) {
+    if (readOnly) return "";
+    var busy = uploading[l.id + "|" + (cid || "")] > 0;
+    return '<label class="btn btn-sm file-btn' + (busy ? ' is-busy' : '') + '">' + (busy ? "Uploading…" : label) +
+      '<input type="file" class="file-input" multiple accept="' + FILE_EXTS.map(function (e) { return "." + e; }).join(",") + '" data-action="file-input" data-id="' + l.id + '" data-cid="' + (cid || "") + '"' + (busy ? " disabled" : "") + '></label>';
+  }
+
+  function renderContactFiles(l, c) {
+    var list = contactFiles(l.id, c.id);
+    if (readOnly && !list.length) return "";
+    return '<div class="ct-files">' + list.map(function (f) { return renderFileItem(l, f, false); }).join("") +
+      renderUploadButton(l, c.id, list.length ? "+ Attach another file" : "+ Attach a file (profile PDF, CV…)") + '</div>';
+  }
+
+  function uploadFiles(leadId, cid, fileList) {
+    var picked = Array.prototype.slice.call(fileList || []);
+    if (!picked.length) return;
+    var key = leadId + "|" + (cid || "");
+    var ok = picked.filter(function (f) {
+      if (FILE_EXTS.indexOf(fileExt(f.name)) === -1) { toast("“" + f.name + "” isn't a supported type. Use a PDF, an image, or an Office, text or CSV file."); return false; }
+      if (f.size > FILE_MAX_BYTES) { toast("“" + f.name + "” is over the 10 MB limit."); return false; }
+      if (f.size === 0) { toast("“" + f.name + "” is empty."); return false; }
+      return true;
+    });
+    if (!ok.length) return;
+    uploading[key] = (uploading[key] || 0) + ok.length;
+    filesPending += ok.length;
+    render();
+    var done = 0;
+    var chain = Promise.resolve();
+    ok.forEach(function (f) {
+      chain = chain.then(function () {
+        return fetch("/api/leads/" + encodeURIComponent(leadId) + "/files" + (cid ? "?contactId=" + encodeURIComponent(cid) : ""), {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent(f.name) },
+          body: f
+        }).then(function (res) {
+          if (res.status === 401) { window.location.href = "/auth/login"; return null; }
+          return res.json().catch(function () { return {}; }).then(function (body) {
+            if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+            return body;
+          });
+        }).then(function (meta) {
+          if (meta && meta.id) { files.push(meta); done++; }
+        }).catch(function (err) {
+          toast("Couldn't upload “" + f.name + "”: " + (err && err.message ? err.message : "unknown error"));
+        }).then(function () {
+          uploading[key]--;
+          filesPending--;
+        });
+      });
+    });
+    chain.then(function () {
+      if (done) toast(done === 1 ? "File saved." : done + " files saved.");
+      render();
+    });
+  }
+
+  function removeFile(fid) {
+    var f = files.filter(function (x) { return x.id === fid; })[0];
+    if (!f) return;
+    if (!window.confirm("Delete “" + f.name + "”? This can't be undone.")) return;
+    files = files.filter(function (x) { return x.id !== fid; });
+    filesPending++;
+    render();
+    fetch("/api/files/" + encodeURIComponent(fid), { method: "DELETE" }).then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+    }).catch(function (err) {
+      files.push(f);
+      toast("Couldn't delete the file: " + (err && err.message ? err.message : "unknown error"));
+      render();
+    }).then(function () { filesPending--; });
+  }
+
+  function loadFiles() {
+    return fetch("/api/files").then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return null; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    }).then(function (list) {
+      if (!list || filesPending > 0) return;
+      if (JSON.stringify(list) !== JSON.stringify(files)) {
+        files = list;
+        var a = document.activeElement;
+        var typing = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+        if (!typing && !activityForm && !dictation.on && view !== "playbook") render();
+      }
+    }).catch(function () { /* files are optional; everything else keeps working without them */ });
   }
 
   function renderContactsPanel(l) {
@@ -746,8 +871,11 @@
   function renderDocumentsPanel(l) {
     var docsHtml = l.documents.length ? l.documents.map(function (doc) {
       return '<div class="doc-item"><span>' + escapeHtml(doc.name) + '</span>' + (readOnly ? "" : '<button type="button" data-action="remove-document" data-id="' + l.id + '" data-did="' + doc.id + '" aria-label="Remove document">✕</button>') + '</div>';
-    }).join("") : '<p style="color:var(--ink-soft);margin:4px 0">No documents logged yet.</p>';
-    return '<h4>Documents</h4><div>' + docsHtml + '</div>' +
+    }).join("") : '<p style="color:var(--ink-soft);margin:4px 0">Nothing on the checklist yet.</p>';
+    var lf = leadFiles(l.id);
+    var filesHtml = (lf.length ? '<div class="file-list">' + lf.map(function (f) { return renderFileItem(l, f, true); }).join("") + '</div>' : '<p class="file-none">No files uploaded yet.</p>') +
+      (readOnly ? "" : '<div class="file-actions">' + renderUploadButton(l, "", "Upload file") + '<span class="file-hint">PDF, images or Office files, up to 10 MB each</span></div>');
+    return '<h4>Documents</h4>' + filesHtml + '<h5 class="doc-sub">Checklist (names only)</h5><div>' + docsHtml + '</div>' +
       (readOnly ? "" : '<div class="add-note"><input type="text" id="doc-input-' + l.id + '" placeholder="Document name, e.g. SOW pertains to client" style="flex:1;border:1px solid var(--ink);background:var(--paper);color:var(--ink);border-radius:8px;padding:6px 9px;font-size:.8rem;font-family:inherit;"><button class="btn btn-sm" type="button" data-action="add-document" data-id="' + l.id + '">Add</button></div>');
   }
 
@@ -2016,6 +2144,7 @@
     var before = state.leads.length;
     var beforeNew = newRolesCount();
     if (!silent || !dictation.on) loadPlaybook();
+    loadFiles();
     fetch("/api/state").then(function (res) {
       if (res.status === 401) { window.location.href = "/auth/login"; return null; }
       if (!res.ok) throw new Error("HTTP " + res.status);
@@ -2166,6 +2295,7 @@
       return;
     }
     if (action === "goto-lead") { var gl = findLead(id); if (gl && gl.inCrm) { openClient(id); } else { gotoLead(id); } return; }
+    if (action === "file-remove") { removeFile(t.getAttribute("data-fid")); return; }
     if (action === "crm-save") { saveToCrm(id); return; }
     if (action === "crm-remove") { removeFromCrm(id); return; }
     if (action === "crm-open") { openClient(id); return; }
@@ -2241,6 +2371,7 @@
     if (!action) return;
     var id = t.getAttribute("data-id");
     var cid = t.getAttribute("data-cid");
+    if (action === "file-input") { uploadFiles(id, cid, t.files); return; }
     if (action === "set-status") { setStatus(id, t.value); return; }
     if (action === "set-priority") { setPriority(id, t.value); return; }
     if (action === "set-contact-stage") { setContactStage(id, cid, t.value); return; }
@@ -2377,6 +2508,7 @@
       state = loaded;
       render();
       loadPlaybook();
+      loadFiles();
     }).catch(function (err) {
       document.getElementById("app").innerHTML =
         '<div class="empty">Couldn\'t load data from the server: ' + escapeHtml(err.message) + '. Is the API running and DATABASE_URL configured?</div>';

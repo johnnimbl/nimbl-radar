@@ -6,6 +6,7 @@ const { pool } = require("./db");
 const { buildSession } = require("./session");
 const { getState, putState } = require("./state");
 const { listPlaybook, upsertPlaybookItem, deletePlaybookItem } = require("./playbook");
+const { listFiles, saveFile, getFile, deleteFile, MAX_FILE_BYTES } = require("./files");
 const { configurePassport, ensureAuthenticated, googleLoginEnabled, ALLOWED_DOMAIN } = require("./auth");
 
 const app = express();
@@ -113,6 +114,76 @@ app.delete("/api/playbook/:id", ensureAuthenticated, async (req, res) => {
     console.error(err);
     res.status(500).json({ error: "Failed to delete the playbook item." });
   }
+});
+
+// --- Uploaded files ------------------------------------------------------------
+app.get("/api/files", ensureAuthenticated, async (req, res) => {
+  try {
+    res.json(await listFiles(pool));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to load files." });
+  }
+});
+
+// The browser sends the raw file as the request body; its name travels in a header so it
+// stays out of URLs and request logs.
+app.post(
+  "/api/leads/:id/files",
+  ensureAuthenticated,
+  express.raw({ type: "application/octet-stream", limit: MAX_FILE_BYTES + 1024 }),
+  async (req, res) => {
+    try {
+      const out = await saveFile(pool, {
+        leadId: req.params.id,
+        contactId: req.query.contactId,
+        rawName: req.get("X-File-Name"),
+        body: req.body,
+        uploadedBy: req.user && req.user.email,
+      });
+      if (out.error) return res.status(out.status).json({ error: out.error });
+      res.json(out.file);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to save the file." });
+    }
+  }
+);
+
+app.get("/api/files/:id", ensureAuthenticated, async (req, res) => {
+  try {
+    const f = await getFile(pool, req.params.id);
+    if (!f) return res.status(404).send("File not found.");
+    res.set({
+      "Content-Type": f.contentType,
+      "Content-Length": String(f.data.length),
+      "Content-Disposition": (f.inline ? "inline" : "attachment") + "; filename*=UTF-8''" + encodeURIComponent(f.name),
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "private, no-store",
+    });
+    res.end(f.data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Failed to load the file.");
+  }
+});
+
+app.delete("/api/files/:id", ensureAuthenticated, async (req, res) => {
+  try {
+    await deleteFile(pool, req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to delete the file." });
+  }
+});
+
+// Oversized uploads are rejected by the body parser before the route runs.
+app.use((err, req, res, next) => {
+  if (err && err.type === "entity.too.large" && req.path.startsWith("/api/")) {
+    return res.status(413).json({ error: "That file is over the 10 MB limit." });
+  }
+  next(err);
 });
 
 app.get("/index.html", ensureAuthenticated, (req, res) => res.redirect("/"));

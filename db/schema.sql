@@ -191,3 +191,21 @@ on conflict (id) do nothing;
 -- CRM tab: a lead you have saved as a good prospect (gets its own full-page client card).
 alter table leads add column if not exists in_crm boolean not null default false;
 alter table leads add column if not exists crm_saved_at date;
+
+-- Uploaded files (profile PDFs, contracts, screenshots) attached to a lead and optionally to
+-- one of its contacts. contact_id is deliberately not a foreign key: contacts are rewritten
+-- on every state save, and a file should outlive the contact it was attached to.
+create table if not exists files (
+  id text primary key,
+  lead_id text not null references leads(id) on delete cascade,
+  contact_id text not null default '',
+  name text not null default '',
+  mime text not null default 'application/octet-stream',
+  size integer not null default 0,
+  data bytea not null,
+  uploaded_by text not null default '',
+  uploaded_at timestamptz not null default now()
+);
+alter table files alter column data set storage external;
+create index if not exists files_lead_id_idx on files(lead_id);
+alter table files enable row level security;
