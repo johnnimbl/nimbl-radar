@@ -67,6 +67,8 @@
   var dictation = { rec: null, on: false, lang: "en-US" };
   try { dictation.lang = window.localStorage.getItem("radar-dictation-lang") || "en-US"; } catch (e) { /* ignore */ }
   var crmQuery = "";
+  var boardMore = {};                 // Pipeline board: stages showing all their cards
+  var recentAll = false;              // Pipeline: show the full recent-communication list
   var activityForm = null; // the open "Log activity" form, if any (kept outside the DOM so re-renders do not lose it)
   var pageSize = PAGE_SIZE_STEP;
   var readOnly = false;
@@ -1131,47 +1133,59 @@
     return out;
   }
 
-  function renderActionRow(lead, c, badge, logLabel) {
+  function renderActionRow(lead, c, badge, logLabel, primary) {
     var who = c.name || "(unnamed contact)";
     var nt = nextTouch(c);
     var label = nt ? "Log touch " + nt.n : logLabel;
     return '' +
       '<div class="ar">' +
+        '<div class="ar-when">' + badge + '</div>' +
         '<div class="ar-main"><div class="nm">' + escapeHtml(who) + (c.isPrimary ? ' <span class="first-badge">★ First</span>' : '') + '</div>' +
-        '<div class="rt">' + escapeHtml(lead.company) + ' · ' + escapeHtml(c.stage || "Not contacted") + (c.lastContacted ? ' · last touch ' + fmtDate(c.lastContacted) : '') + '</div>' +
-        (nt ? '<div class="rt rt-next">Next: ' + escapeHtml(touchShort(c, nt)) + '</div>' : '') + '</div>' +
-        badge +
-        (readOnly ? "" : '<button class="btn btn-sm btn-primary" type="button" data-action="crm-log" data-id="' + lead.id + '" data-cid="' + c.id + '">' + label + '</button>') +
-        '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + lead.id + '">Open</button>' +
+          '<div class="rt">' + escapeHtml(lead.company) + (c.title ? ' · ' + escapeHtml(c.title) : '') + '</div></div>' +
+        '<div class="ar-next">' + (nt ? '<span class="rt-next">' + escapeHtml(touchShort(c, nt)) + '</span>' : '') +
+          '<span class="rt">' + escapeHtml(c.stage || "Not contacted") + (c.lastContacted ? ' · last touch ' + fmtDate(c.lastContacted) : '') + '</span></div>' +
+        '<div class="ar-act">' +
+          (readOnly ? "" : '<button class="btn btn-sm' + (primary === false ? '' : ' btn-primary') + '" type="button" data-action="crm-log" data-id="' + lead.id + '" data-cid="' + c.id + '">' + label + '</button>') +
+          '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + lead.id + '">Open</button>' +
+        '</div>' +
       '</div>';
   }
 
-  function renderActionGroup(title, cls, rows, total, emptyText) {
+
+  // A group inside the "Who to contact" list. Empty groups are not drawn at all.
+  function renderActionGroup(title, cls, rows, total, aside) {
+    if (!rows.length) return "";
+    var more = total > rows.length ? '<div class="ag-more">+ ' + (total - rows.length) + ' more</div>' : '';
     return '' +
       '<div class="ag ' + cls + '">' +
-        '<div class="ag-head"><h4>' + title + '</h4><span class="mono">' + total + '</span></div>' +
-        (rows.length ? rows.join("") : '<div class="ag-empty">' + emptyText + '</div>') +
+        '<div class="ag-head"><h4>' + title + '</h4><span class="ag-count mono">' + total + '</span>' + (aside ? '<span class="ag-aside">' + aside + '</span>' : '') + '</div>' +
+        rows.join("") + more +
       '</div>';
   }
+
 
   function renderBoardCard(l, c) {
     var who = c.name || "(unnamed contact)";
     var stage = c.stage || "Not contacted";
     var badge = dueBadgeFor(c) || (isIsoDate(c.nextFollowUp) && stage !== "Not interested" ? '<span class="kb-next">Next ' + fmtDate(c.nextFollowUp) + '</span>' : "");
+    var step = seqStep(c);
     return '' +
       '<div class="kb-card"' + (readOnly ? "" : ' draggable="true" data-drag="' + l.id + '|' + c.id + '"') + '>' +
-        '<div class="kb-name">' + escapeHtml(who) + '</div>' +
+        '<div class="kb-top"><button type="button" class="kb-name" data-action="goto-lead" data-id="' + l.id + '" title="Open ' + escapeHtml(l.company) + '">' + escapeHtml(who) + (c.isPrimary ? ' <span class="kb-star" title="First contact">★</span>' : '') + '</button>' + badge + '</div>' +
         '<div class="kb-co">' + escapeHtml(l.company) + (c.title ? ' · ' + escapeHtml(c.title) : '') + '</div>' +
-        '<div class="kb-meta">' + (c.lastContacted ? 'Last ' + fmtDate(c.lastContacted) : 'No contact yet') + (badge ? ' ' + badge : '') + '</div>' +
-        '<div class="kb-seq" title="Outreach plan progress">' + SEQUENCE.map(function (t, i) { return '<span class="seq-dot' + (i < seqStep(c) ? ' done' : '') + '"></span>'; }).join("") + '<span>' + seqStep(c) + '/' + SEQUENCE.length + ' touches' + (c.isPrimary ? ' · ★ first' : '') + '</span></div>' +
+        '<div class="kb-seq" title="Outreach plan: ' + step + ' of ' + SEQUENCE.length + ' touches' + (c.lastContacted ? ', last touch ' + fmtDate(c.lastContacted) : '') + '">' +
+          SEQUENCE.map(function (t, i) { return '<span class="seq-dot' + (i < step ? ' done' : '') + '"></span>'; }).join("") +
+          '<span>' + (c.lastContacted ? 'Last ' + fmtDate(c.lastContacted) : 'No contact yet') + '</span></div>' +
         '<div class="kb-actions">' +
           (readOnly ? "" : '<button class="btn btn-sm" type="button" data-action="crm-log" data-id="' + l.id + '" data-cid="' + c.id + '">Log</button>') +
-          '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + l.id + '">Open</button>' +
-          (readOnly ? "" : '<select class="mini kb-move" data-action="set-contact-stage" data-id="' + l.id + '" data-cid="' + c.id + '" aria-label="Move ' + escapeHtml(who) + ' to stage">' +
+          (readOnly ? '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + l.id + '">Open</button>' : '<select class="mini kb-move" data-action="set-contact-stage" data-id="' + l.id + '" data-cid="' + c.id + '" aria-label="Move ' + escapeHtml(who) + ' to stage">' +
             BOARD_STAGES.map(function (s) { return '<option value="' + s + '"' + (stage === s ? " selected" : "") + '>' + s + '</option>'; }).join("") + '</select>') +
         '</div>' +
       '</div>';
   }
+
+
+  var BOARD_COL_LIMIT = 5;
 
   function renderBoard(items) {
     var cols = BOARD_STAGES.map(function (stage) {
@@ -1181,14 +1195,21 @@
         if (fa !== fb) return fa.localeCompare(fb);
         return (a.contact.name || "").localeCompare(b.contact.name || "");
       });
+      var shown = boardMore[stage] ? cards : cards.slice(0, BOARD_COL_LIMIT);
+      var hidden = cards.length - shown.length;
       return '' +
-        '<div class="board-col" data-stage="' + stage + '">' +
+        '<div class="board-col' + (cards.length ? '' : ' is-empty') + '" data-stage="' + stage + '">' +
           '<div class="board-head"><span>' + stage + '</span><span class="mono">' + cards.length + '</span></div>' +
-          '<div class="board-body">' + (cards.length ? cards.map(function (i) { return renderBoardCard(i.lead, i.contact); }).join("") : '<div class="board-empty">' + (readOnly ? "—" : "Drop a contact here") + '</div>') + '</div>' +
+          '<div class="board-body">' +
+            (cards.length ? shown.map(function (i) { return renderBoardCard(i.lead, i.contact); }).join("") : (readOnly ? "" : '<div class="board-empty">Drop here</div>')) +
+            (hidden > 0 ? '<button type="button" class="btn-link board-more" data-action="board-more" data-value="' + escapeHtml(stage) + '">Show ' + hidden + ' more</button>' : '') +
+            (boardMore[stage] && cards.length > BOARD_COL_LIMIT ? '<button type="button" class="btn-link board-more" data-action="board-more" data-value="' + escapeHtml(stage) + '">Show fewer</button>' : '') +
+          '</div>' +
         '</div>';
     }).join("");
     return '<div class="board">' + cols + '</div>';
   }
+
 
   function renderRecentActivity() {
     var all = [];
@@ -1201,7 +1222,8 @@
       var dc = (y.a.date || "").localeCompare(x.a.date || "");
       return dc !== 0 ? dc : y.i - x.i;
     });
-    var rows = all.slice(0, 10).map(function (r) {
+    var limit = recentAll ? 25 : 5;
+    var rows = all.slice(0, limit).map(function (r) {
       var inbound = r.a.direction === "Inbound";
       return '' +
         '<div class="ra" data-action="goto-lead" data-id="' + r.lead.id + '">' +
@@ -1211,7 +1233,9 @@
             (r.a.summary ? ': ' + escapeHtml(r.a.summary.length > 110 ? r.a.summary.slice(0, 107) + "…" : r.a.summary) : '') + '</span>' +
         '</div>';
     }).join("");
-    return '<div class="crm-section"><h3>Recent communication</h3>' + (rows || '<div class="ag-empty">Nothing logged yet. Use "Log" on any contact to record a LinkedIn message, email, call or meeting.</div>') + '</div>';
+    var toggle = all.length > 5 ? '<button type="button" class="btn-link" data-action="recent-more">' + (recentAll ? 'Show fewer' : 'Show more (' + (Math.min(all.length, 25) - 5) + ')') + '</button>' : '';
+    return '<div class="crm-section"><div class="sec-head"><h3>Recent communication</h3>' + toggle + '</div>' +
+      (rows ? '<div class="recent-list">' + rows + '</div>' : '<div class="ag-empty">Nothing logged yet. Use "Log" on any contact to record a LinkedIn message, email, call or meeting.</div>') + '</div>';
   }
 
   function renderCrm() {
@@ -1238,12 +1262,12 @@
     var roomToday = Math.max(0, DAILY_NEW_OUTREACH - sentToday);
     var inConversation = items.filter(function (i) { return i.stage === "Replied" || i.stage === "Meeting booked"; }).length;
 
-    function rowsFor(list, limit, logLabel) {
+    function rowsFor(list, limit, logLabel, primary) {
       return list.slice(0, limit).map(function (x) {
-        return renderActionRow(x.lead, x.contact, '<span class="due-badge ' + dueClass(x.days) + '">' + dueLabel(x.days) + '</span>', logLabel);
+        return renderActionRow(x.lead, x.contact, '<span class="due-badge ' + dueClass(x.days) + '">' + dueLabel(x.days) + '</span>', logLabel, primary);
       });
     }
-    var startRows = start.slice(0, Math.max(roomToday, 3)).map(function (i) {
+    var startRows = start.slice(0, Math.min(Math.max(roomToday, 3), 5)).map(function (i) {
       return renderActionRow(i.lead, i.contact, '<span class="due-badge due-soon">Not started</span>', "Start");
     });
     var secondRows = seconds.slice(0, 6).map(function (x) {
@@ -1252,12 +1276,14 @@
       var quietFor = x.days === null ? "no reply" : "no reply for " + x.days + " days";
       return '' +
         '<div class="ar">' +
+          '<div class="ar-when"><span class="due-badge due-today">Go wider</span></div>' +
           '<div class="ar-main"><div class="nm">' + (nx ? 'Reach out to ' + escapeHtml(nx.name || "(unnamed contact)") : 'Add a second contact') + '</div>' +
-          '<div class="rt">' + escapeHtml(x.lead.company) + (nx && nx.title ? ' · ' + escapeHtml(nx.title) : '') + '</div>' +
-          '<div class="rt rt-next">' + quietWho + ': ' + quietFor + '</div></div>' +
-          '<span class="due-badge due-today">Go wider</span>' +
-          (readOnly || !nx ? "" : '<button class="btn btn-sm btn-primary" type="button" data-action="crm-log" data-id="' + x.lead.id + '" data-cid="' + nx.id + '">Log touch 1</button>') +
-          '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + x.lead.id + '">' + (nx ? 'Open' : 'Add contact') + '</button>' +
+          '<div class="rt">' + escapeHtml(x.lead.company) + (nx && nx.title ? ' · ' + escapeHtml(nx.title) : '') + '</div></div>' +
+          '<div class="ar-next"><span class="rt">' + quietWho + ': ' + quietFor + '</span></div>' +
+          '<div class="ar-act">' +
+            (readOnly || !nx ? "" : '<button class="btn btn-sm btn-primary" type="button" data-action="crm-log" data-id="' + x.lead.id + '" data-cid="' + nx.id + '">Log touch 1</button>') +
+            '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + x.lead.id + '">' + (nx ? 'Open' : 'Add contact') + '</button>' +
+          '</div>' +
         '</div>';
     });
 
@@ -1271,25 +1297,39 @@
 
     var planText = SEQUENCE.map(function (t) { return t.n + ". " + t.name; }).join(" → ");
 
+    // One list, most urgent first. Groups with nothing in them are left out.
+    var urgent = overdue.length + dueToday.length;
+    var status;
+    if (urgent === 0) {
+      var nextUp = week[0] || scheduled.filter(function (x) { return x.days > 0; })[0];
+      status = '<div class="todo-clear"><span class="todo-tick" aria-hidden="true">✓</span><span><strong>Nothing overdue or due today.</strong>' +
+        (nextUp ? ' Next up: ' + escapeHtml(nextUp.contact.name || "(unnamed contact)") + ' at ' + escapeHtml(nextUp.lead.company) + ', ' + dueLabel(nextUp.days).toLowerCase() + '.' : '') + '</span></div>';
+    } else {
+      status = '<div class="todo-clear todo-urgent"><strong>' + urgent + (urgent === 1 ? ' follow-up needs' : ' follow-ups need') + ' you now.</strong></div>';
+    }
+    var paceText = sentToday + ' of ' + DAILY_NEW_OUTREACH + ' new requests sent today';
+    var groups =
+      renderActionGroup("Overdue", "ag-overdue", rowsFor(overdue, 8, "Log"), overdue.length) +
+      renderActionGroup("Due today", "ag-today", rowsFor(dueToday, 8, "Log"), dueToday.length) +
+      renderActionGroup("Reach a second person", "ag-second", secondRows, seconds.length) +
+      renderActionGroup("Start outreach", "ag-start", startRows, start.length, paceText) +
+      renderActionGroup("Coming up · next 7 days", "ag-week", rowsFor(week, 6, "Log", false), week.length);
+    if (!groups) {
+      groups = '<div class="ag-empty todo-none">' + (items.length ? 'Nothing scheduled for the next 7 days, and every company has been approached.' : 'No contacts yet. Add the people you want to reach on a lead, and they will show up here.') + '</div>';
+    }
+
     return '' +
       stats +
-      '<div class="crm-toolbar">' +
-        '<div class="search crm-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
-        '<input type="text" placeholder="Search contact or company" value="' + escapeHtml(crmQuery) + '" data-action="crm-search"></div>' +
-      '</div>' +
-      '<div class="crm-section"><h3>Who to contact</h3>' +
-        '<div class="crm-actions">' +
-          renderActionGroup("Overdue", "ag-overdue", rowsFor(overdue, 6, "Log"), overdue.length, "Nothing overdue.") +
-          renderActionGroup("Today", "ag-today", rowsFor(dueToday, 6, "Log"), dueToday.length, "Nothing due today.") +
-          renderActionGroup("Next 7 days", "ag-week", rowsFor(week, 6, "Log"), week.length, "Nothing scheduled this week.") +
-          renderActionGroup("Reach a second person", "ag-second", secondRows, seconds.length, "No company is waiting on a reply.") +
-          renderActionGroup("Start outreach", "ag-start", startRows, start.length, "Every company has been approached.") +
+      '<div class="crm-section">' +
+        '<div class="sec-head"><h3>Who to contact</h3>' +
+          '<div class="search crm-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
+          '<input type="text" placeholder="Search contact or company" value="' + escapeHtml(crmQuery) + '" data-action="crm-search"></div>' +
         '</div>' +
-        '<p class="pace">New connection requests today: <strong>' + sentToday + '</strong> of ' + DAILY_NEW_OUTREACH + (roomToday > 0 ? ' — room for ' + roomToday + ' more. Spreading them across days keeps your LinkedIn account safe.' : ' — that is plenty for today. Come back tomorrow.') + '</p>' +
-        '<p class="help">Every contact follows a five-touch plan: ' + escapeHtml(planText) + '. Follow-up dates come from that plan and you can always change one. A reply pauses the plan.</p>' +
+        '<div class="crm-actions">' + status + groups + '</div>' +
+        '<p class="pace">' + (roomToday > 0 ? 'Room for ' + roomToday + ' more new connection request' + (roomToday === 1 ? '' : 's') + ' today. Spreading them across days keeps your LinkedIn account safe.' : 'You have sent ' + sentToday + ' new connection requests today. That is plenty; come back tomorrow.') + '</p>' +
+        '<details class="plan-help"><summary>How the five-touch plan works</summary><p>' + escapeHtml(planText) + '. Follow-up dates come from that plan and you can always change one. A reply pauses the plan.</p></details>' +
       '</div>' +
-      '<div class="crm-section"><h3>Pipeline</h3>' + renderBoard(items) +
-        '<p class="help">' + (readOnly ? "" : "Drag a card to a new column, or use its menu, to move a contact. ") + 'Contacts at companies marked Lost or Not a Fit are hidden.</p></div>' +
+      '<div class="crm-section"><div class="sec-head"><h3>Pipeline</h3><span class="sec-note">' + (readOnly ? "" : "Drag a card or use its menu to move a contact. ") + 'Lost and Not a Fit companies are hidden.</span></div>' + renderBoard(items) + '</div>' +
       renderRecentActivity();
   }
 
@@ -1319,12 +1359,12 @@
 
   function renderAlertLine(l, a, withButton) {
     var rd = a.datePosted ? daysSince(a.datePosted) : null;
-    return '<div class="ra-item">' +
-      '<div class="ra-main"><strong>' + escapeHtml(a.jobTitle || a.roleType || "New opening") + '</strong>' +
+    return '<div class="nr-item">' +
+      '<div class="nr-main"><strong>' + escapeHtml(a.jobTitle || a.roleType || "New opening") + '</strong>' +
         (a.roleType ? '<span class="role-tag">' + escapeHtml(a.roleType) + '</span>' : '') +
-        '<div class="ra-meta">' + (rd !== null ? 'Posted ' + rd + 'd ago · ' : '') + 'found ' + fmtDate(a.foundAt) +
+        '<div class="nr-meta">' + (rd !== null ? 'Posted ' + rd + 'd ago · ' : '') + 'found ' + fmtDate(a.foundAt) +
           (a.jobUrl ? ' · <a href="' + escapeHtml(a.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') + '</div>' +
-        (a.note ? '<div class="ra-note">' + escapeHtml(a.note) + '</div>' : '') +
+        (a.note ? '<div class="nr-note">' + escapeHtml(a.note) + '</div>' : '') +
       '</div>' +
       (withButton && !readOnly ? '<button type="button" class="btn btn-sm" data-action="alert-seen" data-id="' + l.id + '" data-aid="' + escapeHtml(a.id) + '">Mark as seen</button>' : '') +
     '</div>';
@@ -1432,7 +1472,7 @@
     return '' +
       '<button type="button" class="cl-card" data-action="crm-open" data-id="' + l.id + '">' +
         '<span class="cl-top"><span class="cl-name">' + escapeHtml(l.company) + '</span><span class="pill ' + priorityClass(l.priority) + '">' + l.priority + '</span></span>' +
-        (unseenAlerts(l).length ? '<span class="ra-chip">● ' + unseenAlerts(l).length + ' new role' + (unseenAlerts(l).length === 1 ? '' : 's') + ' posted</span>' : '') +
+        (unseenAlerts(l).length ? '<span class="nr-chip">● ' + unseenAlerts(l).length + ' new role' + (unseenAlerts(l).length === 1 ? '' : 's') + ' posted</span>' : '') +
         '<span class="cl-role">' + escapeHtml(l.jobTitle || l.roleType || "") + '</span>' +
         '<span class="cl-row"><span class="pill status-pill ' + statusClass(l.status) + '">' + escapeHtml(l.status) + '</span>' +
           '<span class="cl-dots" title="Outreach plan: ' + step + ' of ' + SEQUENCE.length + ' touches">' + dots + '</span></span>' +
@@ -1484,7 +1524,7 @@
       body = '<div class="cl-grid">' + list.map(renderClientListCard).join("") + '</div>';
     }
     var alerted = all.filter(function (l) { return unseenAlerts(l).length; });
-    var alertBanner = alerted.length ? '<div class="ra-banner"><strong>New openings at ' + alerted.length + (alerted.length === 1 ? ' company' : ' companies') + ' in your CRM.</strong> A fresh role is a good reason to get back in touch. ' +
+    var alertBanner = alerted.length ? '<div class="nr-banner"><strong>New openings at ' + alerted.length + (alerted.length === 1 ? ' company' : ' companies') + ' in your CRM.</strong> A fresh role is a good reason to get back in touch. ' +
       alerted.map(function (l) { return '<button type="button" class="btn-link" data-action="crm-open" data-id="' + l.id + '">' + escapeHtml(l.company) + ' →</button>'; }).join(" ") + '</div>' : '';
     return stats + alertBanner +
       '<div class="crm-toolbar cl-toolbar">' +
@@ -1578,7 +1618,7 @@
           (l.jobUrl ? '<a href="' + escapeHtml(l.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') +
           (l.website ? '<a href="' + escapeHtml(l.website) + '" target="_blank" rel="noopener">Company site ↗</a>' : '') +
         '</div>' +
-        ((l.roleAlerts || []).length ? '<h4>Found since</h4><div class="ra-list">' + l.roleAlerts.map(function (a) { return renderAlertLine(l, a, false); }).join("") + '</div>' : '') +
+        ((l.roleAlerts || []).length ? '<h4>Found since</h4><div class="nr-list">' + l.roleAlerts.map(function (a) { return renderAlertLine(l, a, false); }).join("") + '</div>' : '') +
       '</section>';
 
     var isWon = l.status === "Won";
@@ -1592,8 +1632,8 @@
         '<header class="cc-head">' +
           '<div><h2>' + escapeHtml(l.company) + '</h2><div class="cc-sub">Saved ' + fmtDate(l.crmSavedAt) + (l.estSize ? ' · ' + escapeHtml(shortText(l.estSize, 40)) : '') + '</div></div>' +
         '</header>' +
-        (unseenAlerts(l).length ? '<section class="ra-panel" aria-label="New roles posted">' +
-          '<div class="ra-head"><span class="cc-lbl">New role' + (unseenAlerts(l).length === 1 ? '' : 's') + ' posted since you saved this company</span>' +
+        (unseenAlerts(l).length ? '<section class="nr-panel" aria-label="New roles posted">' +
+          '<div class="nr-head"><span class="cc-lbl">New role' + (unseenAlerts(l).length === 1 ? '' : 's') + ' posted since you saved this company</span>' +
           (unseenAlerts(l).length > 1 && !readOnly ? '<button type="button" class="btn-link" data-action="alert-seen" data-id="' + l.id + '">Mark all as seen</button>' : '') + '</div>' +
           unseenAlerts(l).map(function (a) { return renderAlertLine(l, a, true); }).join("") +
         '</section>' : '') +
@@ -2362,6 +2402,8 @@
       return;
     }
     if (action === "goto-lead") { var gl = findLead(id); if (gl && gl.inCrm) { openClient(id); } else { gotoLead(id); } return; }
+    if (action === "board-more") { var bs = t.getAttribute("data-value"); boardMore[bs] = !boardMore[bs]; render(); return; }
+    if (action === "recent-more") { recentAll = !recentAll; render(); return; }
     if (action === "alert-seen") { markAlertsSeen(id, t.getAttribute("data-aid")); return; }
     if (action === "file-remove") { removeFile(t.getAttribute("data-fid")); return; }
     if (action === "crm-save") { saveToCrm(id); return; }
