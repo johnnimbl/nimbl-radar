@@ -50,6 +50,24 @@
   var FILE_MAX_BYTES = 10 * 1024 * 1024;
   var ctOpen = {};                    // client card: contact ids whose detail fields are expanded
   var crmFilter = "Active";           // CRM list filter: Active / Clients / Closed / All
+  var CRM_SORTS = [
+    { key: "next", label: "Next follow-up" },
+    { key: "priority", label: "Priority" },
+    { key: "stage", label: "Furthest along" },
+    { key: "last", label: "Last touch" },
+    { key: "saved", label: "Recently saved" },
+    { key: "company", label: "Company A–Z" }
+  ];
+  var crmSort = "next", crmSortDesc = false, crmLayout = "cards";   // CRM list: sort, direction flip, cards or list
+  try {
+    var savedCrmView = JSON.parse(window.localStorage.getItem("radar-crm-view") || "{}");
+    if (CRM_SORTS.some(function (o) { return o.key === savedCrmView.sort; })) crmSort = savedCrmView.sort;
+    if (savedCrmView.layout === "list" || savedCrmView.layout === "cards") crmLayout = savedCrmView.layout;
+    crmSortDesc = savedCrmView.desc === true;
+  } catch (e) { /* ignore */ }
+  function saveCrmView() {
+    try { window.localStorage.setItem("radar-crm-view", JSON.stringify({ sort: crmSort, layout: crmLayout, desc: crmSortDesc })); } catch (e) { /* ignore */ }
+  }
   var cardMore = false;               // client card: show the full company text instead of the short version
   var tlLimit = 12;                   // client card: how many timeline entries are showing
   var view = "leads";
@@ -1810,6 +1828,81 @@
       '</button>';
   }
 
+  // CRM list ordering. Each key has a natural direction (soonest, highest, furthest, newest, A–Z);
+  // crmSortDesc flips it (clicking the same column header twice in list view).
+  function sortClients(list) {
+    var STATUS_ORDER = STATUSES;
+    function nextDays(l) { var n = leadNextStep(l); return n ? n.days : 9999; }
+    function tie(a, b) { return nextDays(a) - nextDays(b) || priorityRank(a.priority) - priorityRank(b.priority) || a.company.localeCompare(b.company); }
+    var cmp = {
+      next: function (a, b) {
+        var aa = unseenAlerts(a).length ? 0 : 1, ab = unseenAlerts(b).length ? 0 : 1;
+        return aa - ab || tie(a, b);
+      },
+      priority: function (a, b) { return priorityRank(a.priority) - priorityRank(b.priority) || tie(a, b); },
+      stage: function (a, b) {
+        var sa = STATUS_ORDER.indexOf(a.status), sb = STATUS_ORDER.indexOf(b.status);
+        if (DEAD_STATUSES.indexOf(a.status) !== -1) sa = -1;
+        if (DEAD_STATUSES.indexOf(b.status) !== -1) sb = -1;
+        var ta = maxStep(a), tb = maxStep(b);
+        return sb - sa || tb - ta || tie(a, b);
+      },
+      last: function (a, b) {
+        var la = leadLastActivity(a) || "", lb = leadLastActivity(b) || "";
+        if (la !== lb) return la ? (lb ? lb.localeCompare(la) : -1) : 1;
+        return tie(a, b);
+      },
+      saved: function (a, b) { return (b.crmSavedAt || "").localeCompare(a.crmSavedAt || "") || tie(a, b); },
+      company: function (a, b) { return a.company.localeCompare(b.company); }
+    }[crmSort] || function () { return 0; };
+    list.sort(cmp);
+    if (crmSortDesc) list.reverse();
+    return list;
+  }
+
+  function maxStep(l) {
+    var ns = leadNextStep(l);
+    var fc = ns ? ns.contact : firstContact(l);
+    return fc ? seqStep(fc) : 0;
+  }
+
+  function renderClientRow(l) {
+    var ns = leadNextStep(l);
+    var step = maxStep(l);
+    var nC = (l.contacts || []).length;
+    var dots = SEQUENCE.map(function (t, i) { return '<span class="seq-dot' + (i < step ? ' done' : '') + '"></span>'; }).join("");
+    var last = leadLastActivity(l);
+    var nAl = unseenAlerts(l).length;
+    var next = ns ? '<span class="due-badge ' + dueClass(ns.days) + '">' + dueLabel(ns.days) + '</span> <span class="cl-who">' + escapeHtml(ns.contact.name || "(unnamed contact)") + '</span>'
+      : '<span class="cl-muted">' + (nC ? 'None scheduled' : 'No contacts yet') + '</span>';
+    return '' +
+      '<tr class="lead-row cl-tr" tabindex="0" data-action="crm-open" data-id="' + l.id + '">' +
+        '<td><div class="cl-tname">' + escapeHtml(l.company) + '</div>' +
+          (nAl ? '<span class="nr-chip">● ' + nAl + ' new role' + (nAl === 1 ? '' : 's') + '</span>' : '') +
+          '<div class="cl-trole">' + escapeHtml(l.jobTitle || l.roleType || "") + '</div></td>' +
+        '<td><span class="pill ' + priorityClass(l.priority) + '">' + l.priority + '</span></td>' +
+        '<td><span class="pill status-pill ' + statusClass(l.status) + '">' + escapeHtml(l.status) + '</span></td>' +
+        '<td class="cl-col-touch"><span class="cl-dots" title="Outreach plan: ' + step + ' of ' + SEQUENCE.length + ' touches">' + dots + '</span></td>' +
+        '<td class="cl-tnext">' + next + '</td>' +
+        '<td class="cl-col-num mono">' + nC + '</td>' +
+        '<td class="cl-col-last">' + (last ? fmtDate(last) : '<span class="cl-muted">None</span>') + '</td>' +
+      '</tr>';
+  }
+
+  function renderClientTable(list) {
+    function th(label, key, cls) {
+      if (!key) return '<th' + (cls ? ' class="' + cls + '"' : '') + '>' + label + '</th>';
+      var on = crmSort === key;
+      var arrow = on ? (crmSortDesc ? ' ↑' : ' ↓') : '';
+      return '<th' + (cls ? ' class="' + cls + '"' : '') + ' aria-sort="' + (on ? (crmSortDesc ? 'descending' : 'ascending') : 'none') + '">' +
+        '<button type="button" class="th-sort' + (on ? ' on' : '') + '" data-action="crm-sort-col" data-value="' + key + '">' + label + arrow + '</button></th>';
+    }
+    return '<div class="table-wrap cl-table"><table><thead><tr>' +
+      th('Company', 'company') + th('Priority', 'priority') + th('Status', 'stage') + th('Touches', 'stage', 'cl-col-touch') +
+      th('Next step', 'next') + th('People', '', 'cl-col-num') + th('Last touch', 'last', 'cl-col-last') +
+      '</tr></thead><tbody>' + list.map(renderClientRow).join("") + '</tbody></table></div>';
+  }
+
   function renderClients() {
     if (crmLeadId) {
       var open = findLead(crmLeadId);
@@ -1824,13 +1917,7 @@
       if (crmFilter !== "All" && crmGroupOf(l) !== crmFilter) return false;
       return !q || (l.company + " " + (l.jobTitle || "") + " " + (l.roleType || "")).toLowerCase().indexOf(q) !== -1;
     });
-    list.sort(function (a, b) {
-      var aa = unseenAlerts(a).length ? 0 : 1, ab = unseenAlerts(b).length ? 0 : 1;
-      if (aa !== ab) return aa - ab;
-      var na = leadNextStep(a), nb = leadNextStep(b);
-      var da = na ? na.days : 9999, db = nb ? nb.days : 9999;
-      return da - db || priorityRank(a.priority) - priorityRank(b.priority) || a.company.localeCompare(b.company);
-    });
+    sortClients(list);
     var dueNow = all.filter(function (l) { var n = leadNextStep(l); return n && n.days <= 0 && crmGroupOf(l) === "Active"; }).length;
     var talking = all.filter(function (l) { return l.status === "Replied" || l.status === "Meeting Booked" || l.status === "Proposal Sent"; }).length;
     var stats = '' +
@@ -1849,7 +1936,7 @@
     } else if (!list.length) {
       body = '<div class="empty">No prospects match this filter.</div>';
     } else {
-      body = '<div class="cl-grid">' + list.map(renderClientListCard).join("") + '</div>';
+      body = crmLayout === "list" ? renderClientTable(list) : '<div class="cl-grid">' + list.map(renderClientListCard).join("") + '</div>';
     }
     var alerted = all.filter(function (l) { return unseenAlerts(l).length; });
     var alertBanner = alerted.length ? '<div class="nr-banner"><strong>New openings at ' + alerted.length + (alerted.length === 1 ? ' company' : ' companies') + ' in your CRM.</strong> A fresh role is a good reason to get back in touch. ' +
@@ -1857,8 +1944,18 @@
     return stats + alertBanner +
       '<div class="crm-toolbar cl-toolbar">' +
         '<div class="chipset">' + chips + '</div>' +
+        '<div class="cl-controls">' +
+        '<label class="cl-sort"><span>Sort</span><select class="mini" data-action="crm-sort" aria-label="Sort prospects">' +
+          CRM_SORTS.map(function (o) { return '<option value="' + o.key + '"' + (crmSort === o.key ? ' selected' : '') + '>' + o.label + '</option>'; }).join("") +
+        '</select></label>' +
+        (crmSortDesc ? '<button type="button" class="btn-link" data-action="crm-sort-reset" title="Back to the normal order">Reversed ✕</button>' : '') +
+        '<div class="seg cl-layout" role="group" aria-label="Layout">' +
+          '<button type="button" class="seg-btn' + (crmLayout === "cards" ? ' on' : '') + '" aria-pressed="' + (crmLayout === "cards") + '" data-action="crm-layout" data-value="cards">▦ Cards</button>' +
+          '<button type="button" class="seg-btn' + (crmLayout === "list" ? ' on' : '') + '" aria-pressed="' + (crmLayout === "list") + '" data-action="crm-layout" data-value="list">☰ List</button>' +
+        '</div>' +
         '<div class="search crm-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
         '<input type="text" placeholder="Search prospects" value="' + escapeHtml(clientQuery) + '" data-action="client-search"></div>' +
+        '</div>' +
       '</div>' + body;
   }
 
@@ -2787,6 +2884,13 @@
     if (action === "crm-open") { openClient(id); return; }
     if (action === "crm-back") { closeClient(); return; }
     if (action === "crm-filter") { crmFilter = t.getAttribute("data-value"); render(); return; }
+    if (action === "crm-layout") { crmLayout = t.getAttribute("data-value") === "list" ? "list" : "cards"; saveCrmView(); render(); return; }
+    if (action === "crm-sort-col") {
+      var sk = t.getAttribute("data-value");
+      if (crmSort === sk) { crmSortDesc = !crmSortDesc; } else { crmSort = sk; crmSortDesc = false; }
+      saveCrmView(); render(); return;
+    }
+    if (action === "crm-sort-reset") { crmSortDesc = false; saveCrmView(); render(); return; }
     if (action === "card-more") { cardMore = !cardMore; render(); return; }
     if (action === "ct-toggle") { if (ctOpen[cid]) { delete ctOpen[cid]; } else { ctOpen[cid] = true; } render(); return; }
     if (action === "tl-more") { tlLimit += 12; render(); return; }
@@ -2864,6 +2968,7 @@
     if (action === "file-input") { uploadFiles(id, cid, t.files); return; }
     if (action === "set-status") { setStatus(id, t.value); return; }
     if (action === "set-priority") { setPriority(id, t.value); return; }
+    if (action === "crm-sort") { crmSort = t.value; crmSortDesc = false; saveCrmView(); render(); return; }
     if (action === "set-contact-stage") { setContactStage(id, cid, t.value); return; }
     if (action === "set-followup") { setFollowUp(id, cid, t.value); return; }
     if (action === "set-seq-step") { setSeqStep(id, cid, t.value); return; }
@@ -2954,6 +3059,7 @@
   document.getElementById("app").addEventListener("keydown", function (e) {
     if (e.key === "Escape" && (view === "pipeline" || view === "crm") && activityForm) { activityForm = null; render(); return; }
     if (e.key !== "Enter") return;
+    if (e.target.classList && e.target.classList.contains("cl-tr")) { e.preventDefault(); e.target.click(); return; }
     if (e.target.classList && e.target.classList.contains("stat-link")) { e.preventDefault(); e.target.click(); return; }
     var id = e.target.id;
     if (id === "cap-role-name") { e.preventDefault(); addRoleType(); }

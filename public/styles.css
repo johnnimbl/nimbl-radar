@@ -549,3 +549,25 @@ input.ct-name-input:focus,input.ct-name-input:hover{border-color:var(--ink);back
 .stat-link{cursor:pointer;}
 .stat-link:hover{background:var(--surface-2);}
 .stat-link:focus-visible{outline:2px solid var(--ink);outline-offset:-4px;}
+
+/* CRM list: sort + cards/list toggle */
+.cl-controls{display:flex;align-items:center;gap:10px 12px;flex-wrap:wrap;}
+.cl-sort{display:flex;align-items:center;gap:6px;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);}
+.cl-layout{gap:0;flex-wrap:nowrap;}
+.cl-layout .seg-btn{border-radius:0;min-height:32px;padding:5px 12px;}
+.cl-layout .seg-btn:first-child{border-radius:999px 0 0 999px;}
+.cl-layout .seg-btn:last-child{border-radius:0 999px 999px 0;border-left:0;}
+.cl-layout .seg-btn.on{background:var(--ink);color:var(--paper);}
+.cl-table table{min-width:820px;}
+.cl-table tbody td{padding:10px 14px;}
+.cl-tname{font-weight:700;}
+.cl-trole{font-size:.74rem;color:var(--ink-soft);margin-top:2px;max-width:280px;}
+.cl-table .nr-chip{display:inline-block;margin-top:4px;}
+.cl-tnext{white-space:nowrap;font-size:.82rem;}
+.cl-col-num{text-align:center;}
+td.cl-col-last{white-space:nowrap;font-size:.82rem;}
+th.cl-col-last{white-space:nowrap;}
+.cl-tr:focus-visible{outline:2px solid var(--teal);outline-offset:-2px;}
+.th-sort{all:unset;cursor:pointer;font:inherit;letter-spacing:inherit;text-transform:inherit;color:inherit;}
+.th-sort:hover, .th-sort.on{color:var(--ink);}
+.th-sort:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
