@@ -678,7 +678,10 @@
     var linkedinOk = /^https?:\/\//.test(c.linkedin || "");
     var fc = firstContact(l);
     var isFirst = fc && fc.id === c.id && (l.contacts || []).length > 0;
-    var firstBadge = c.isPrimary ? '<span class="first-badge">★ First contact</span>' : (isFirst && (l.contacts || []).length > 1 ? '<span class="first-badge first-suggest" title="Best fit by job title">★ Suggested first</span>' : "");
+    var suggested = !c.isPrimary && isFirst && (l.contacts || []).length > 1;
+    var firstBadge = c.isPrimary ? '<span class="first-badge">★ First contact</span>' : (suggested ?
+      '<span class="first-suggest-wrap"><span class="first-badge first-suggest" title="Best fit by job title">★ Suggested first</span>' +
+      (readOnly ? "" : '<button type="button" class="first-confirm" data-action="toggle-primary" data-id="' + l.id + '" data-cid="' + c.id + '" title="Keep ' + escapeHtml(c.name || "this person") + ' as the first contact">Confirm</button>') + '</span>' : "");
     return '' +
       '<div class="contact-card' + (c.isPrimary ? ' is-primary' : '') + '">' +
         '<div class="contact-head">' +
@@ -697,7 +700,7 @@
             '<label>Next follow-up <input type="date" value="' + escapeHtml(c.nextFollowUp || "") + '" data-action="set-followup" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></label>' +
             dueBadgeFor(c) +
             (linkedinOk ? '<a href="' + escapeHtml(c.linkedin) + '" target="_blank" rel="noopener">LinkedIn ↗</a>' : '') +
-            (readOnly || (l.contacts || []).length < 2 ? "" : '<button type="button" class="btn-link" data-action="toggle-primary" data-id="' + l.id + '" data-cid="' + c.id + '">' + (c.isPrimary ? "Remove first-contact flag" : "Make first contact") + '</button>') +
+            (readOnly || (l.contacts || []).length < 2 || suggested ? "" : '<button type="button" class="btn-link" data-action="toggle-primary" data-id="' + l.id + '" data-cid="' + c.id + '">' + (c.isPrimary ? "Remove first-contact flag" : "Make first contact") + '</button>') +
           '</div>' +
           (formOpen ? renderActivityForm(l, c) : (readOnly ? "" : '<div><button class="btn btn-sm" type="button" data-action="open-activity-form" data-id="' + l.id + '" data-cid="' + c.id + '">+ Log activity</button></div>')) +
           (inClientCard ? "" : timeline) +

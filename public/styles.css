@@ -521,3 +521,9 @@ input.ct-name-input:focus,input.ct-name-input:hover{border-color:var(--ink);back
   .mv-btns{justify-content:flex-start;}
   .mv-draft{grid-column:1 / -1;}
 }
+
+/* Suggested first contact: confirm it right on the badge */
+.first-suggest-wrap{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;}
+.first-confirm{font:inherit;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;background:var(--yellow);color:var(--ink);border:1px solid var(--ink);border-radius:999px;padding:1px 9px;cursor:pointer;}
+.first-confirm:hover{background:var(--ink);color:var(--paper);}
+.first-confirm:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
