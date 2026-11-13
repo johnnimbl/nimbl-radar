@@ -199,6 +199,18 @@ app.post("/api/leads/:id/role-alerts/seen", ensureAuthenticated, async (req, res
   }
 });
 
+// --- Agent drafts (written by the morning scan; never sent by the app) ---------
+app.post("/api/agent-drafts/:id/:how(used|dismissed)", ensureAuthenticated, async (req, res) => {
+  try {
+    const col = req.params.how === "used" ? "used_at" : "dismissed_at";
+    await pool.query(`update agent_drafts set ${col} = coalesce(${col}, now()) where id = $1`, [String(req.params.id)]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update the draft." });
+  }
+});
+
 // Oversized uploads are rejected by the body parser before the route runs.
 app.use((err, req, res, next) => {
   if (err && err.type === "entity.too.large" && req.path.startsWith("/api/")) {

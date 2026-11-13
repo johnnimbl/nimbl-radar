@@ -226,3 +226,23 @@ create table if not exists role_alerts (
 );
 create index if not exists role_alerts_lead_id_idx on role_alerts(lead_id);
 alter table role_alerts enable row level security;
+
+-- Work the morning scan prepares for "Next moves": message drafts (kind 'message', per contact
+-- and touch), re-engagement drafts for new roles ('reengage', meta.alertId) and suggested people
+-- for CRM companies with no contacts ('contact', meta: name, title, linkedin, why, source).
+-- dedupe_key stops the scan from writing the same draft twice. The app never sends anything.
+create table if not exists agent_drafts (
+  id text primary key default gen_random_uuid()::text,
+  lead_id text not null references leads(id) on delete cascade,
+  contact_id text not null default '',
+  kind text not null check (kind in ('message', 'reengage', 'contact')),
+  touch integer not null default 0,
+  dedupe_key text not null unique,
+  body text not null default '',
+  meta jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  used_at timestamptz,
+  dismissed_at timestamptz
+);
+create index if not exists agent_drafts_lead_id_idx on agent_drafts(lead_id);
+alter table agent_drafts enable row level security;

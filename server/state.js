@@ -56,6 +56,12 @@ async function getState(pool) {
     ? await pool.query("select * from role_alerts where lead_id = any($1) order by found_at desc, id", [leadIds])
     : { rows: [] };
   const alertsByLead = groupBy(alertsRes.rows, "lead_id");
+  const draftsRes = leadIds.length
+    ? await pool.query(
+        `select * from agent_drafts where lead_id = any($1) and used_at is null and dismissed_at is null
+           and created_at > now() - interval '21 days' order by created_at desc, id`, [leadIds])
+    : { rows: [] };
+  const draftsByLead = groupBy(draftsRes.rows, "lead_id");
   const candIds = candsRes.rows.map((r) => r.id);
   const candNotesRes = candIds.length
     ? await pool.query("select * from candidate_notes where candidate_id = any($1) order by sort_order, id", [candIds])
@@ -93,6 +99,10 @@ async function getState(pool) {
     inCrm: !!l.in_crm,
     crmSavedAt: dateOrEmpty(l.crm_saved_at),
     clientInfo: l.client_info || emptyClientInfo(),
+    agentDrafts: (draftsByLead[l.id] || []).map((d) => ({
+      id: d.id, contactId: d.contact_id || "", kind: d.kind, touch: d.touch || 0, body: d.body || "",
+      meta: d.meta || {}, createdAt: d.created_at.toISOString().slice(0, 10),
+    })),
     roleAlerts: (alertsByLead[l.id] || []).map((a) => ({
       id: a.id, roleType: a.role_type || "", jobTitle: a.job_title || "", jobUrl: a.job_url || "",
       datePosted: dateOrEmpty(a.date_posted), note: a.note || "",

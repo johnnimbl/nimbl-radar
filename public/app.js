@@ -67,6 +67,10 @@
   var dictation = { rec: null, on: false, lang: "en-US" };
   try { dictation.lang = window.localStorage.getItem("radar-dictation-lang") || "en-US"; } catch (e) { /* ignore */ }
   var crmQuery = "";
+  var movesAll = false;               // Pipeline: show every next move, not just the top ones
+  var draftOpen = {};                 // next-move keys whose draft panel is open
+  var draftEdits = {};                // draft id -> text edited on screen before copying
+  var MOVES_SHOWN = 8;
   var boardMore = {};                 // Pipeline board: stages showing all their cards
   var recentAll = false;              // Pipeline: show the full recent-communication list
   var activityForm = null; // the open "Log activity" form, if any (kept outside the DOM so re-renders do not lose it)
@@ -1120,6 +1124,10 @@
       tab("crm", "CRM", count(crmAlertCount(), crmAlertCount() === 1 ? "new role at a CRM company" : "new roles at CRM companies")) + tab("playbook", "Playbook") + '</div>';
   }
 
+  function crmContactsFor(l) {
+    return (l.contacts || []).map(function (c) { return { lead: l, contact: c, stage: c.stage || "Not contacted" }; });
+  }
+
   function crmContacts() {
     var q = crmQuery.trim().toLowerCase();
     var out = [];
@@ -1131,6 +1139,268 @@
       });
     });
     return out;
+  }
+
+  /* ---------------- Next moves: one ranked list, each with a reason and an owner ---------------- */
+
+  function lastDir(c, dir) {
+    var best = "";
+    (c.activities || []).forEach(function (a) {
+      if (a.type === "Note" || !a.date) return;
+      if ((dir === "Inbound") === (a.direction === "Inbound") && a.date > best) best = a.date;
+    });
+    return best;
+  }
+
+  function leadDrafts(l, kind) {
+    return (l.agentDrafts || []).filter(function (d) { return !kind || d.kind === kind; });
+  }
+  function messageDraft(l, c, touchN) {
+    return leadDrafts(l, "message").filter(function (d) { return d.contactId === c.id && d.touch === touchN; })[0] || null;
+  }
+
+  function agoText(iso) {
+    var d = isIsoDate(iso) ? diffDays(todayStr(), iso) : null;
+    if (d === null) return "";
+    return d <= 0 ? "today" : d === 1 ? "yesterday" : d + " days ago";
+  }
+
+  // Builds the ranked list. items = crmContacts() (already search-filtered, dead companies removed).
+  function nextMoves(items) {
+    var today = todayStr();
+    var moves = [];
+    var seenContact = {};
+    var leadsInView = {};
+    items.forEach(function (i) { leadsInView[i.lead.id] = i.lead; });
+    function prioBoost(l) { return (l.priority === "High" ? 12 : l.priority === "Medium" ? 5 : 0) + (l.inCrm ? 6 : 0); }
+    function add(m) {
+      if (m.contact) {
+        var prev = seenContact[m.contact.id];
+        if (prev && prev.score >= m.score) return;
+        if (prev) moves.splice(moves.indexOf(prev), 1);
+        seenContact[m.contact.id] = m;
+      }
+      moves.push(m);
+    }
+
+    items.forEach(function (i) {
+      var l = i.lead, c = i.contact, stage = i.stage;
+      var who = c.name || "(unnamed contact)";
+      var nt = nextTouch(c);
+      // 1. A reply waiting for an answer
+      if (stage === "Replied") {
+        var lin = lastDir(c, "Inbound"), lout = lastDir(c, "Outbound");
+        if (!lout || (lin && lin >= lout)) {
+          add({ key: "reply-" + c.id, kind: "reply", lead: l, contact: c, owner: "you", score: 100 + prioBoost(l),
+            action: "Answer " + who + "'s reply",
+            why: "They replied" + (lin ? " " + agoText(lin) : "") + ". Replies go cold fast, so answer while the conversation is warm.",
+            badge: '<span class="due-badge due-overdue">Replied</span>', logLabel: "Log reply" });
+          return;
+        }
+      }
+      // 2. Follow-ups that are due
+      if (isIsoDate(c.nextFollowUp) && stage !== "Not interested") {
+        var days = diffDays(c.nextFollowUp, today);
+        if (days <= 0) {
+          var whyDue = days < 0 ? "Follow-up is " + (-days) + (days === -1 ? " day" : " days") + " overdue" : "Follow-up is due today";
+          var ctx = stage + (c.lastContacted ? ", last touch " + agoText(c.lastContacted) : "");
+          add({ key: "due-" + c.id, kind: "due", lead: l, contact: c, owner: nt ? "both" : "you",
+            score: (days < 0 ? 90 + Math.min(-days, 10) : 70) + prioBoost(l),
+            action: nt ? "Send touch " + nt.n + " (" + nt.name.toLowerCase() + ") to " + who : "Follow up with " + who,
+            why: whyDue + " (" + ctx + ").",
+            badge: '<span class="due-badge ' + dueClass(days) + '">' + dueLabel(days) + '</span>',
+            touch: nt, draft: nt ? messageDraft(l, c, nt.n) : null, logLabel: "Log" });
+        }
+      }
+    });
+
+    // 3. New roles posted at CRM companies
+    crmLeads().forEach(function (l) {
+      if (!leadsInView[l.id] && (l.contacts || []).length) return;
+      unseenAlerts(l).forEach(function (a) {
+        var target = firstContact(l);
+        var touched = (l.contacts || []).filter(function (c) { return (c.stage || "Not contacted") !== "Not contacted" && c.stage !== "Not interested"; });
+        if (touched.length) target = touched.sort(function (x, y) { return (y.lastContacted || "").localeCompare(x.lastContacted || ""); })[0];
+        var draft = leadDrafts(l, "reengage").filter(function (d) { return d.meta && d.meta.alertId === a.id; })[0] || null;
+        moves.push({ key: "alert-" + a.id, kind: "alert", lead: l, contact: target || null, owner: target ? "both" : "agent",
+          score: 80 + prioBoost(l), alert: a, draft: draft,
+          action: target ? "Re-engage " + (target.name || "your contact") + " about the new " + (a.jobTitle || a.roleType) + " role" : "Find who to contact about the new " + (a.jobTitle || a.roleType) + " role",
+          why: l.company + " posted a new role" + (a.datePosted ? " " + agoText(a.datePosted) : "") + ". A fresh opening is the easiest reason to get back in touch.",
+          badge: '<span class="due-badge due-overdue">New role</span>', logLabel: "Log" });
+      });
+    });
+
+    // 4. Companies gone quiet: reach a second person
+    secondContactPrompts().forEach(function (x) {
+      if (!leadsInView[x.lead.id]) return;
+      var quietFor = x.days === null ? "has not replied" : "has not replied for " + x.days + " days";
+      var nx = x.next;
+      var t1 = nx ? nextTouch(nx) : null;
+      add({ key: "second-" + x.lead.id, kind: "second", lead: x.lead, contact: nx, owner: nx ? "both" : "agent",
+        score: 60 + prioBoost(x.lead),
+        action: nx ? "Go wider: connect with " + (nx.name || "the next person") : "Find a second person at " + x.lead.company,
+        why: (x.quiet.name || "Your contact") + " " + quietFor + ". Trying someone else at the company often unblocks it.",
+        badge: '<span class="due-badge due-today">Go wider</span>',
+        touch: t1, draft: nx && t1 ? messageDraft(x.lead, nx, t1.n) : null, logLabel: "Log touch 1" });
+    });
+
+    // 5. Companies not approached yet (one first contact each, paced)
+    var room = Math.max(0, DAILY_NEW_OUTREACH - newOutreachToday());
+    var starts = items.filter(function (i) {
+      if (i.stage !== "Not contacted" || isIsoDate(i.contact.nextFollowUp)) return false;
+      var started = (i.lead.contacts || []).some(function (c) { return (c.stage || "Not contacted") !== "Not contacted"; });
+      if (started) return false;
+      var fc = firstContact(i.lead);
+      return !fc || fc.id === i.contact.id;
+    });
+    starts.forEach(function (i) {
+      var l = i.lead, c = i.contact;
+      var rd = daysSince(l.datePosted);
+      var bits = [l.priority + " priority"];
+      if (rd !== null) bits.push("role posted " + (rd <= 0 ? "today" : rd + "d ago"));
+      if (l.inCrm) bits.push("saved in your CRM");
+      add({ key: "start-" + c.id, kind: "start", lead: l, contact: c, owner: "both",
+        score: 35 + prioBoost(l) + (rd !== null && rd <= 7 ? 4 : 0),
+        action: "Send a connection request to " + (c.name || "(unnamed contact)"),
+        why: bits.join(", ") + ". Nobody there has been approached yet.",
+        badge: '<span class="due-badge due-soon">Not started</span>',
+        touch: SEQUENCE[0], draft: messageDraft(l, c, 1), logLabel: "Log touch 1", paced: true });
+    });
+
+    // 6. CRM companies with nobody to contact
+    crmLeads().forEach(function (l) {
+      if ((l.contacts || []).length || DEAD_STATUSES.indexOf(l.status) !== -1) return;
+      if (crmQuery && l.company.toLowerCase().indexOf(crmQuery.trim().toLowerCase()) === -1) return;
+      var sugg = leadDrafts(l, "contact");
+      moves.push({ key: "find-" + l.id, kind: "find", lead: l, contact: null, owner: sugg.length ? "both" : "agent",
+        score: 50 + prioBoost(l), suggestions: sugg,
+        action: sugg.length ? "Pick who to contact at " + l.company : "Find the right person at " + l.company,
+        why: "In your CRM since " + fmtDate(l.crmSavedAt) + " with no contacts yet." + (sugg.length ? " The agent found " + sugg.length + (sugg.length === 1 ? " person" : " people") + " worth a look." : ""),
+        badge: '<span class="due-badge due-today">No contacts</span>' });
+    });
+
+    moves.sort(function (a, b) { return b.score - a.score || a.lead.company.localeCompare(b.lead.company); });
+    // keep connection requests within today's pace
+    var startsShown = 0;
+    moves = moves.filter(function (m) {
+      if (!m.paced) return true;
+      startsShown++;
+      return startsShown <= Math.max(room, 1);
+    });
+    return { moves: moves, room: room };
+  }
+
+  var OWNER_LABEL = { agent: "Agent", you: "You", both: "Agent + You" };
+
+  function ownerTag(owner) {
+    if (owner === "both") return '<span class="own own-both" title="The agent prepares it, you send it"><span class="own-a">Agent</span> + <span class="own-y">You</span></span>';
+    return '<span class="own own-' + owner + '" title="' + (owner === "agent" ? "The agent does this in the morning scan" : "This one is yours") + '">' + OWNER_LABEL[owner] + '</span>';
+  }
+
+  function agentStatus(m) {
+    if (m.owner === "you") return "";
+    if (m.kind === "find") return m.suggestions && m.suggestions.length ? "" : '<div class="mv-agent">Agent: will look for the right people here in the next morning scan.</div>';
+    if (m.draft) return "";
+    return '<div class="mv-agent">Agent: will draft the ' + (m.kind === "start" || m.kind === "second" ? "connection note" : "message") + ' in the next morning scan.</div>';
+  }
+
+  function renderDraftPanel(m) {
+    var d = m.draft;
+    var text = draftEdits[d.id] !== undefined ? draftEdits[d.id] : d.body;
+    var isNote = d.touch === 1;
+    var len = text.length;
+    var limit = isNote ? 200 : 0;
+    return '<div class="mv-draft">' +
+      '<div class="mv-draft-head"><span class="cc-lbl">Draft ' + (isNote ? "connection note" : "message") + ' · prepared ' + fmtDate(d.createdAt) + '</span>' +
+        '<span class="mv-count' + (limit && len > limit ? ' over' : '') + '">' + len + (limit ? ' / ' + limit : '') + ' characters</span></div>' +
+      '<textarea class="mv-text" data-action="draft-edit" data-did="' + escapeHtml(d.id) + '" rows="' + (isNote ? 3 : 6) + '">' + escapeHtml(text) + '</textarea>' +
+      (d.meta && d.meta.why ? '<div class="mv-agent">' + escapeHtml(d.meta.why) + '</div>' : '') +
+      '<div class="mv-draft-act">' +
+        '<button type="button" class="btn btn-sm btn-primary" data-action="draft-copy" data-did="' + escapeHtml(d.id) + '">Copy</button>' +
+        (m.contact && /^https?:\/\//.test(m.contact.linkedin || "") ? '<a class="btn btn-sm" href="' + escapeHtml(m.contact.linkedin) + '" target="_blank" rel="noopener">Open LinkedIn ↗</a>' : '') +
+        (readOnly ? "" : '<button type="button" class="btn-link" data-action="draft-dismiss" data-id="' + m.lead.id + '" data-did="' + escapeHtml(d.id) + '">Dismiss draft</button>') +
+      '</div>' +
+      '<p class="mv-hint">Edit it here, copy it, send it yourself, then press Log. Nothing is ever sent for you.</p>' +
+    '</div>';
+  }
+
+  function renderSuggestions(m) {
+    return '<div class="mv-draft">' + m.suggestions.map(function (d) {
+      var x = d.meta || {};
+      return '<div class="sg-item"><div class="sg-main"><strong>' + escapeHtml(x.name || "(no name)") + '</strong>' + (x.title ? ' · ' + escapeHtml(x.title) : '') +
+        (x.why ? '<div class="mv-agent">' + escapeHtml(x.why) + '</div>' : '') +
+        (x.linkedin ? '<a href="' + escapeHtml(x.linkedin) + '" target="_blank" rel="noopener">LinkedIn ↗</a>' : '') + '</div>' +
+        (readOnly ? "" : '<div class="sg-act"><button type="button" class="btn btn-sm btn-primary" data-action="draft-add-contact" data-id="' + m.lead.id + '" data-did="' + escapeHtml(d.id) + '">Add as contact</button>' +
+          '<button type="button" class="btn-link" data-action="draft-dismiss" data-id="' + m.lead.id + '" data-did="' + escapeHtml(d.id) + '">Not right</button></div>') +
+      '</div>';
+    }).join("") + '</div>';
+  }
+
+  function renderMove(m, compact, inCard) {
+    var hasPanel = (m.draft && m.contact) || (m.suggestions && m.suggestions.length);
+    var open = !!draftOpen[m.key];
+    var t = m.touch;
+    var logBtn = "";
+    if (!readOnly && m.contact) {
+      logBtn = '<button class="btn btn-sm' + (hasPanel ? '' : ' btn-primary') + '" type="button" data-action="crm-log" data-id="' + m.lead.id + '" data-cid="' + m.contact.id + '">' + (t ? 'Log touch ' + t.n : m.logLabel || 'Log') + '</button>';
+    }
+    var panelBtn = hasPanel ? '<button class="btn btn-sm btn-primary" type="button" data-action="move-toggle" data-key="' + escapeHtml(m.key) + '" aria-expanded="' + open + '">' + (m.suggestions && m.suggestions.length ? (open ? 'Hide people' : 'See ' + m.suggestions.length + (m.suggestions.length === 1 ? ' person' : ' people')) : (open ? 'Hide draft' : 'Draft ready')) + '</button>' : '';
+    return '' +
+      '<div class="mv' + (open ? ' is-open' : '') + '" data-kind="' + m.kind + '">' +
+        '<div class="mv-tag">' + ownerTag(m.owner) + '</div>' +
+        '<div class="mv-main">' +
+          '<div class="mv-act">' + escapeHtml(m.action) + '</div>' +
+          '<div class="mv-who">' + m.badge + '<span>' + escapeHtml(m.lead.company) + (m.contact && m.contact.title ? ' · ' + escapeHtml(m.contact.title) : '') + '</span></div>' +
+          (compact ? '' : '<div class="mv-why"><span class="mv-why-l">Why now</span> ' + escapeHtml(m.why) + '</div>') +
+          (compact ? '' : agentStatus(m)) +
+        '</div>' +
+        '<div class="mv-btns">' + panelBtn + logBtn +
+          (inCard ? '' : '<button class="btn btn-sm" type="button" data-action="goto-lead" data-id="' + m.lead.id + '">Open</button>') +
+        '</div>' +
+        (open && hasPanel ? (m.suggestions && m.suggestions.length ? renderSuggestions(m) : renderDraftPanel(m)) : '') +
+      '</div>';
+  }
+
+  function draftById(id) {
+    for (var i = 0; i < state.leads.length; i++) {
+      var ds = state.leads[i].agentDrafts || [];
+      for (var j = 0; j < ds.length; j++) if (ds[j].id === id) return { lead: state.leads[i], draft: ds[j] };
+    }
+    return null;
+  }
+
+  function closeDraft(id, how) {
+    var hit = draftById(id);
+    if (hit) hit.lead.agentDrafts = hit.lead.agentDrafts.filter(function (d) { return d.id !== id; });
+    delete draftEdits[id];
+    fetch("/api/agent-drafts/" + encodeURIComponent(id) + "/" + how, { method: "POST" }).then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+    }).catch(function (err) { toast("Couldn't update the draft: " + (err && err.message ? err.message : "unknown error")); });
+  }
+
+  function copyDraft(id) {
+    var hit = draftById(id);
+    if (!hit) return;
+    var text = draftEdits[id] !== undefined ? draftEdits[id] : hit.draft.body;
+    var done = function () { toast("Copied. Paste it into LinkedIn or your email, then press Log."); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { toast("Couldn't copy automatically. Select the text and copy it."); });
+    } else {
+      toast("Couldn't copy automatically. Select the text and copy it.");
+    }
+  }
+
+  function addSuggestedContact(leadId, id) {
+    var l = findLead(leadId);
+    var hit = draftById(id);
+    if (!l || !hit) return;
+    var x = hit.draft.meta || {};
+    var cid = "c" + Date.now().toString(36);
+    l.contacts.push({ id: cid, name: x.name || "", title: x.title || "", email: "", phone: "", linkedin: x.linkedin || "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", sequenceStep: 0, isPrimary: false, activities: [] });
+    closeDraft(id, "used");
+    persist();
+    toast((x.name || "Contact") + " added to " + l.company + ".");
   }
 
   function renderActionRow(lead, c, badge, logLabel, primary) {
@@ -1297,31 +1567,35 @@
 
     var planText = SEQUENCE.map(function (t) { return t.n + ". " + t.name; }).join(" → ");
 
-    // One list, most urgent first. Groups with nothing in them are left out.
-    var urgent = overdue.length + dueToday.length;
+    // Next moves: one ranked list across every company, each with a reason and an owner.
+    var nm = nextMoves(items);
+    var moves = nm.moves;
+    var urgent = moves.filter(function (m) { return m.score >= 70; }).length;
     var status;
-    if (urgent === 0) {
-      var nextUp = week[0] || scheduled.filter(function (x) { return x.days > 0; })[0];
+    if (!urgent) {
+      var nextUp = week[0];
       status = '<div class="todo-clear"><span class="todo-tick" aria-hidden="true">✓</span><span><strong>Nothing overdue or due today.</strong>' +
-        (nextUp ? ' Next up: ' + escapeHtml(nextUp.contact.name || "(unnamed contact)") + ' at ' + escapeHtml(nextUp.lead.company) + ', ' + dueLabel(nextUp.days).toLowerCase() + '.' : '') + '</span></div>';
+        (nextUp ? ' Next follow-up: ' + escapeHtml(nextUp.contact.name || "(unnamed contact)") + ' at ' + escapeHtml(nextUp.lead.company) + ', ' + dueLabel(nextUp.days).toLowerCase() + '.' : '') + '</span></div>';
     } else {
-      status = '<div class="todo-clear todo-urgent"><strong>' + urgent + (urgent === 1 ? ' follow-up needs' : ' follow-ups need') + ' you now.</strong></div>';
+      status = '<div class="todo-clear todo-urgent"><strong>' + urgent + (urgent === 1 ? ' move needs' : ' moves need') + ' you today.</strong></div>';
     }
-    var paceText = sentToday + ' of ' + DAILY_NEW_OUTREACH + ' new requests sent today';
-    var groups =
-      renderActionGroup("Overdue", "ag-overdue", rowsFor(overdue, 8, "Log"), overdue.length) +
-      renderActionGroup("Due today", "ag-today", rowsFor(dueToday, 8, "Log"), dueToday.length) +
-      renderActionGroup("Reach a second person", "ag-second", secondRows, seconds.length) +
-      renderActionGroup("Start outreach", "ag-start", startRows, start.length, paceText) +
-      renderActionGroup("Coming up · next 7 days", "ag-week", rowsFor(week, 6, "Log", false), week.length);
+    var shownMoves = movesAll ? moves : moves.slice(0, MOVES_SHOWN);
+    var movesHtml = shownMoves.length
+      ? '<div class="ag ag-moves"><div class="ag-head"><h4>Next moves</h4><span class="ag-count mono">' + moves.length + '</span><span class="ag-aside">' + sentToday + ' of ' + DAILY_NEW_OUTREACH + ' new requests sent today</span></div>' +
+          shownMoves.map(function (m) { return renderMove(m); }).join("") +
+          (moves.length > MOVES_SHOWN ? '<div class="ag-more"><button type="button" class="btn-link" data-action="moves-all">' + (movesAll ? 'Show the top ' + MOVES_SHOWN + ' only' : 'Show all ' + moves.length + ' moves') + '</button></div>' : '') +
+        '</div>'
+      : '';
+    var weekRows = week.filter(function (x) { return !moves.some(function (m) { return m.contact && m.contact.id === x.contact.id; }); });
+    var groups = movesHtml + renderActionGroup("Coming up · next 7 days", "ag-week", rowsFor(weekRows, 6, "Log", false), weekRows.length);
     if (!groups) {
-      groups = '<div class="ag-empty todo-none">' + (items.length ? 'Nothing scheduled for the next 7 days, and every company has been approached.' : 'No contacts yet. Add the people you want to reach on a lead, and they will show up here.') + '</div>';
+      groups = '<div class="ag-empty todo-none">' + (items.length ? 'Nothing to do right now and nothing scheduled for the next 7 days.' : 'No contacts yet. Add the people you want to reach on a lead, and they will show up here.') + '</div>';
     }
 
     return '' +
       stats +
       '<div class="crm-section">' +
-        '<div class="sec-head"><h3>Who to contact</h3>' +
+        '<div class="sec-head"><h3>Next moves</h3>' +
           '<div class="search crm-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>' +
           '<input type="text" placeholder="Search contact or company" value="' + escapeHtml(crmQuery) + '" data-action="crm-search"></div>' +
         '</div>' +
@@ -1569,10 +1843,13 @@
       return '<button type="button" class="seg-btn seg-prio-' + pr.toLowerCase() + '" aria-pressed="' + (l.priority === pr) + '" data-action="card-priority" data-id="' + l.id + '" data-value="' + pr + '"' + d + '>' + pr + '</button>';
     }).join("") + '</div>';
 
-    // Next step
+    // Next step: the company's top move, with its reason and owner; falls back to the schedule.
+    var topMove = DEAD_STATUSES.indexOf(l.status) === -1 ? nextMoves(crmContactsFor(l)).moves.filter(function (m) { return m.lead.id === l.id; })[0] : null;
     var ns = leadNextStep(l);
     var nextHtml;
-    if (ns) {
+    if (topMove) {
+      nextHtml = '<div class="cc-move">' + renderMove(topMove, false, true) + '</div>';
+    } else if (ns) {
       var nt = nextTouch(ns.contact);
       nextHtml = '<span class="due-badge ' + dueClass(ns.days) + '">' + dueLabel(ns.days) + '</span>' +
         '<div class="ns-main"><strong>' + escapeHtml(ns.contact.name || "(unnamed contact)") + '</strong>' + (ns.contact.title ? ' · ' + escapeHtml(ns.contact.title) : '') +
@@ -2076,6 +2353,9 @@
     if (c.stage === "Not interested") c.nextFollowUp = "";
     activityForm = null;
     autoAdvanceLead(l, c.stage);
+    leadDrafts(l).filter(function (d) { return d.contactId === c.id && d.kind !== "contact"; }).forEach(function (d) { closeDraft(d.id, "used"); });
+    // Getting back in touch with a CRM company answers its new-role alerts.
+    if (f.direction !== "Inbound" && f.type !== "Note" && l.inCrm && unseenAlerts(l).length) markAlertsSeen(l.id);
     persist();
   }
 
@@ -2402,6 +2682,11 @@
       return;
     }
     if (action === "goto-lead") { var gl = findLead(id); if (gl && gl.inCrm) { openClient(id); } else { gotoLead(id); } return; }
+    if (action === "moves-all") { movesAll = !movesAll; render(); return; }
+    if (action === "move-toggle") { var mk = t.getAttribute("data-key"); draftOpen[mk] = !draftOpen[mk]; render(); return; }
+    if (action === "draft-copy") { copyDraft(t.getAttribute("data-did")); return; }
+    if (action === "draft-dismiss") { closeDraft(t.getAttribute("data-did"), "dismissed"); render(); return; }
+    if (action === "draft-add-contact") { addSuggestedContact(id, t.getAttribute("data-did")); return; }
     if (action === "board-more") { var bs = t.getAttribute("data-value"); boardMore[bs] = !boardMore[bs]; render(); return; }
     if (action === "recent-more") { recentAll = !recentAll; render(); return; }
     if (action === "alert-seen") { markAlertsSeen(id, t.getAttribute("data-aid")); return; }
@@ -2548,6 +2833,17 @@
       render();
       var ci2 = document.querySelector('input[data-action="client-search"]');
       if (ci2) { ci2.focus(); ci2.setSelectionRange(ci2.value.length, ci2.value.length); }
+      return;
+    }
+    if (e.target.getAttribute("data-action") === "draft-edit") {
+      var did = e.target.getAttribute("data-did");
+      draftEdits[did] = e.target.value;
+      var cnt = e.target.parentNode.querySelector(".mv-count");
+      if (cnt) {
+        var lim = /\/ 200/.test(cnt.textContent) ? 200 : 0;
+        cnt.textContent = e.target.value.length + (lim ? " / " + lim : "") + " characters";
+        cnt.classList.toggle("over", !!lim && e.target.value.length > lim);
+      }
       return;
     }
     if (e.target.getAttribute("data-action") === "pb-draft") { pbDraft.body = e.target.value; return; }
