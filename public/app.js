@@ -1092,12 +1092,21 @@
       '</div>';
   }
 
+  function overdueCount() {
+    return allFollowUps().filter(function (f) { return f.days < 0; }).length;
+  }
+
   function renderViewTabs() {
-    var due = dueNowCount();
+    var fresh = newRolesCount();
+    var overdue = overdueCount();
     function tab(v, label, extra) {
       return '<button type="button" class="viewtab" role="tab" aria-selected="' + (view === v) + '" data-action="set-view" data-view="' + v + '">' + label + (extra || "") + '</button>';
     }
-    return '<div class="viewtabs" role="tablist">' + tab("leads", "Leads") + tab("pipeline", "Pipeline", due > 0 ? ' <span class="tab-count">' + due + '</span>' : "") + tab("crm", "CRM", crmLeads().length ? ' <span class="tab-count tab-count-quiet">' + crmLeads().length + '</span>' : "") + tab("playbook", "Playbook") + '</div>';
+    function count(n, what) { return n > 0 ? ' <span class="tab-count" title="' + n + ' ' + what + '">' + n + '</span>' : ""; }
+    return '<div class="viewtabs" role="tablist">' +
+      tab("leads", "Leads", count(fresh, fresh === 1 ? "new lead" : "new leads")) +
+      tab("pipeline", "Pipeline", count(overdue, overdue === 1 ? "overdue follow-up" : "overdue follow-ups")) +
+      tab("crm", "CRM") + tab("playbook", "Playbook") + '</div>';
   }
 
   function crmContacts() {
