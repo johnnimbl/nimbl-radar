@@ -535,3 +535,9 @@ input.ct-name-input:focus,input.ct-name-input:hover{border-color:var(--ink);back
 .li-when{color:var(--ink-soft);font-size:.72rem;}
 .cc-sub a{color:var(--teal);font-weight:600;}
 .client-card .cc-sec .links{margin-top:6px;}
+
+/* Leads tab: closed (Not a Fit / Lost) leads at the bottom */
+.closed-leads{margin-top:28px;}
+.closed-leads .sec-head h3{display:flex;align-items:center;gap:8px;font-size:.95rem;color:var(--ink-soft);}
+.table-closed{opacity:.8;}
+.table-closed tr.lead-row:hover{opacity:1;}

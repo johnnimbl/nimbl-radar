@@ -71,6 +71,7 @@
   var draftOpen = {};                 // next-move keys whose draft panel is open
   var draftEdits = {};                // draft id -> text edited on screen before copying
   var MOVES_SHOWN = 8;
+  var closedShown = 3;                // Leads tab: how many closed (Not a Fit / Lost) leads are listed
   var boardMore = {};                 // Pipeline board: stages showing all their cards
   var recentAll = false;              // Pipeline: show the full recent-communication list
   var activityForm = null; // the open "Log activity" form, if any (kept outside the DOM so re-renders do not lose it)
@@ -170,8 +171,30 @@
     return prospectLeads().filter(function (l) { return l.priority === "High"; }).length;
   }
 
+  function isClosedLead(l) { return DEAD_STATUSES.indexOf(l.status) !== -1; }
+
+  // Leads matching the search, role and priority filters (status aside).
+  function matchesLeadFilters(l) {
+    if (filters.roleType !== "All" && l.roleType !== filters.roleType) return false;
+    if (filters.priority !== "All" && l.priority !== filters.priority) return false;
+    if (filters.q) {
+      var hay = (l.company + " " + l.jobTitle + " " + l.requiredSkills).toLowerCase();
+      if (hay.indexOf(filters.q.toLowerCase()) === -1) return false;
+    }
+    return true;
+  }
+
+  // Not a Fit and Lost leads sit in their own section at the bottom of the Leads tab.
+  function closedLeads() {
+    if (DEAD_STATUSES.indexOf(filters.status) !== -1) return [];
+    return prospectLeads().filter(function (l) {
+      return isClosedLead(l) && (filters.status === "All") && matchesLeadFilters(l);
+    }).sort(function (a, b) { return a.company.localeCompare(b.company); });
+  }
+
   function filteredLeads() {
     return prospectLeads().filter(function (l) {
+      if (isClosedLead(l) && DEAD_STATUSES.indexOf(filters.status) === -1) return false;
       if (filters.roleType !== "All" && l.roleType !== filters.roleType) return false;
       if (filters.priority !== "All" && l.priority !== filters.priority) return false;
       if (filters.status !== "All" && l.status !== filters.status) return false;
@@ -503,7 +526,7 @@
     var nn = newRolesCount();
     return '' +
       '<div class="stats">' +
-        '<div class="stat"><div class="num mono">' + prospectLeads().length + '</div><div class="lbl">Leads to work</div></div>' +
+        '<div class="stat"><div class="num mono">' + prospectLeads().filter(function (l) { return !isClosedLead(l); }).length + '</div><div class="lbl">Leads to work</div></div>' +
         '<div class="stat' + (nn > 0 ? " stat-highlight" : "") + '"><div class="num mono">' + nn + '</div><div class="lbl">New roles found</div></div>' +
         '<div class="stat"><div class="num mono">' + highPriorityCount() + '</div><div class="lbl">High priority</div></div>' +
         '<div class="stat"><div class="num mono">' + activeOutreachCount() + '</div><div class="lbl">In active outreach</div></div>' +
@@ -1071,7 +1094,7 @@
   function renderTable() {
     var all = filteredLeads();
     if (all.length === 0) {
-      return '<div class="table-wrap"><div class="empty">No leads match these filters.</div></div>' + renderCrmHiddenNote();
+      return '<div class="table-wrap"><div class="empty">No leads match these filters.</div></div>' + renderCrmHiddenNote() + renderClosedLeads();
     }
     var leads = all.slice(0, pageSize);
     var rows = leads.map(renderRow).join("");
@@ -1083,7 +1106,21 @@
         '</tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
       '</table></div>' +
-      (remaining > 0 ? '<div class="show-more-wrap"><button class="btn" type="button" data-action="show-more">Show more (' + remaining + ' more)</button></div>' : '') + renderCrmHiddenNote();
+      (remaining > 0 ? '<div class="show-more-wrap"><button class="btn" type="button" data-action="show-more">Show more (' + remaining + ' more)</button></div>' : '') + renderCrmHiddenNote() + renderClosedLeads();
+  }
+
+  function renderClosedLeads() {
+    var all = closedLeads();
+    if (!all.length) return "";
+    var shown = all.slice(0, closedShown);
+    var rest = all.length - shown.length;
+    return '<div class="closed-leads">' +
+      '<div class="sec-head"><h3>Not a fit or lost <span class="ag-count mono">' + all.length + '</span></h3>' +
+        '<span class="sec-note">Kept for reference. Change a status back to bring a lead into the list above.</span></div>' +
+      '<div class="table-wrap table-closed"><table><tbody>' + shown.map(renderRow).join("") + '</tbody></table></div>' +
+      (rest > 0 ? '<div class="show-more-wrap"><button class="btn btn-sm" type="button" data-action="closed-more">See ' + rest + ' more</button></div>' :
+        (all.length > 3 ? '<div class="show-more-wrap"><button class="btn-link" type="button" data-action="closed-less">Show fewer</button></div>' : '')) +
+    '</div>';
   }
 
   function renderAddForm() {
@@ -2264,7 +2301,14 @@
   function setStatus(id, val) {
     var l = findLead(id);
     if (!l) return;
+    var wasClosed = isClosedLead(l);
     l.status = val;
+    if (view === "leads" && !l.inCrm && isClosedLead(l) && !wasClosed) {
+      if (expandedId === id) expandedId = null;
+      toast(l.company + " moved to “Not a fit or lost” at the bottom of the list.");
+    } else if (view === "leads" && !l.inCrm && wasClosed && !isClosedLead(l)) {
+      toast(l.company + " is back in the main list.");
+    }
     persist();
   }
 
@@ -2625,6 +2669,8 @@
     expandedId = id;
     var idx = filteredLeads().map(function (l) { return l.id; }).indexOf(id);
     if (idx !== -1) pageSize = Math.max(pageSize, idx + 1);
+    var cidx = closedLeads().map(function (l) { return l.id; }).indexOf(id);
+    if (cidx !== -1) closedShown = Math.max(closedShown, cidx + 1);
     render();
     var rowEl = document.querySelector('tr[data-id="' + id + '"]');
     if (rowEl && typeof rowEl.scrollIntoView === "function") rowEl.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -2720,6 +2766,8 @@
     if (action === "draft-copy") { copyDraft(t.getAttribute("data-did")); return; }
     if (action === "draft-dismiss") { closeDraft(t.getAttribute("data-did"), "dismissed"); render(); return; }
     if (action === "draft-add-contact") { addSuggestedContact(id, t.getAttribute("data-did")); return; }
+    if (action === "closed-more") { closedShown += 10; render(); return; }
+    if (action === "closed-less") { closedShown = 3; render(); return; }
     if (action === "board-more") { var bs = t.getAttribute("data-value"); boardMore[bs] = !boardMore[bs]; render(); return; }
     if (action === "recent-more") { recentAll = !recentAll; render(); return; }
     if (action === "alert-seen") { markAlertsSeen(id, t.getAttribute("data-aid")); return; }
