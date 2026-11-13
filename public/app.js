@@ -2363,7 +2363,10 @@
     if (c.stage === "Not interested") c.nextFollowUp = "";
     activityForm = null;
     autoAdvanceLead(l, c.stage);
-    leadDrafts(l).filter(function (d) { return d.contactId === c.id && d.kind !== "contact"; }).forEach(function (d) { closeDraft(d.id, "used"); });
+    // Logging a touch uses up the drafts for that touch and earlier ones; drafts for later touches stay.
+    leadDrafts(l).filter(function (d) {
+      return d.contactId === c.id && d.kind !== "contact" && (d.kind === "reengage" || (d.touch || 0) <= newStep);
+    }).forEach(function (d) { closeDraft(d.id, "used"); });
     // Getting back in touch with a CRM company answers its new-role alerts.
     if (f.direction !== "Inbound" && f.type !== "Note" && l.inCrm && unseenAlerts(l).length) markAlertsSeen(l.id);
     persist();
