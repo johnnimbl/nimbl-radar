@@ -599,3 +599,12 @@ th.cl-col-last{white-space:nowrap;}
 .jd-check{flex-direction:row;align-items:center;gap:8px;font-weight:600;color:var(--ink);}
 .jd-src summary{cursor:pointer;font-size:.78rem;font-weight:600;color:var(--ink-soft);margin-bottom:6px;}
 .jd-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+
+/* Backups */
+.bk-btn{display:inline-flex;align-items:center;gap:8px;}
+.bk-dot{width:9px;height:9px;border-radius:50%;border:1px solid var(--ink);}
+.bk-dot.ok{background:var(--good);}
+.bk-dot.warn{background:var(--yellow);}
+.bk-panel{border:1px solid var(--ink);border-radius:12px;background:var(--surface);padding:14px 16px;margin:0 0 18px;display:flex;flex-direction:column;gap:8px;font-size:.86rem;line-height:1.5;max-width:640px;margin-left:auto;}
+.bk-panel p{margin:0;}
+.bk-err{color:var(--critical);}

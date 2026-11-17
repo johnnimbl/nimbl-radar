@@ -9,6 +9,8 @@ const { listPlaybook, upsertPlaybookItem, deletePlaybookItem } = require("./play
 const { listFiles, saveFile, getFile, deleteFile, MAX_FILE_BYTES } = require("./files");
 const { listJds, getJd, createJd, updateJd, deleteJd } = require("./jds");
 const { renderJobDescriptionPdf } = require("./jdpdf");
+const backup = require("./backup");
+const crypto = require("crypto");
 const { configurePassport, ensureAuthenticated, googleLoginEnabled, ALLOWED_DOMAIN } = require("./auth");
 
 const app = express();
@@ -72,10 +74,51 @@ app.get("/", ensureAuthenticated, (req, res) => {
 app.get("/api/state", ensureAuthenticated, async (req, res) => {
   try {
     res.json(await getState(pool));
+    // Using the app is what wakes it on Render's free tier, so check for a due weekly backup here.
+    backup.backupIfDue(pool).catch((err) => console.error("Weekly backup failed:", err.message));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to load state." });
   }
+});
+
+// --- Backups (Google Drive + download) ----------------------------------------
+app.get("/auth/drive", ensureAuthenticated, (req, res) => {
+  if (!backup.driveConfigured()) return res.status(400).send("Google sign-in isn't configured on this server.");
+  const state = crypto.randomBytes(16).toString("hex");
+  req.session.driveState = state;
+  req.session.save(() => res.redirect(backup.authUrl(state, req.user && req.user.email)));
+});
+app.get("/auth/drive/callback", ensureAuthenticated, async (req, res) => {
+  const expected = req.session && req.session.driveState;
+  if (req.session) delete req.session.driveState;
+  if (req.query.error) return res.redirect("/?backup=" + encodeURIComponent("cancelled"));
+  if (!expected || req.query.state !== expected || !req.query.code) return res.redirect("/?backup=" + encodeURIComponent("error:Sign-in link expired, try again"));
+  try {
+    await backup.finishConnect(pool, String(req.query.code));
+    await backup.runBackup(pool, "first");
+    res.redirect("/?backup=connected");
+  } catch (err) {
+    console.error(err);
+    res.redirect("/?backup=" + encodeURIComponent("error:" + String(err.message || err).slice(0, 160)));
+  }
+});
+app.get("/api/backup/status", ensureAuthenticated, async (req, res) => {
+  try { res.json(await backup.status(pool)); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to read backup status." }); }
+});
+app.post("/api/backup/run", ensureAuthenticated, async (req, res) => {
+  try { res.json(await backup.runBackup(pool, "manual")); } catch (err) { console.error(err); res.status(500).json({ error: String(err.message || err) }); }
+});
+app.post("/api/backup/disconnect", ensureAuthenticated, async (req, res) => {
+  try { await backup.disconnect(pool); res.json({ ok: true }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to disconnect." }); }
+});
+app.get("/api/backup/download", ensureAuthenticated, async (req, res) => {
+  try {
+    const data = await backup.buildBackup(pool);
+    const name = "Nimbl Radar backup " + data.exportedAt.slice(0, 10) + ".json";
+    res.set({ "Content-Type": "application/json", "Content-Disposition": "attachment; filename*=UTF-8''" + encodeURIComponent(name), "Cache-Control": "private, no-store" });
+    res.send(JSON.stringify(data));
+  } catch (err) { console.error(err); res.status(500).send("Failed to build the backup."); }
 });
 
 app.put("/api/state", ensureAuthenticated, async (req, res) => {
@@ -264,4 +307,7 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Nimbl Radar listening on http://localhost:${port}`);
+  backup.ensureSettingsTable(pool).catch((err) => console.error("app_settings:", err.message));
+  // While the server is awake, look for a due weekly backup every 3 hours.
+  setInterval(() => backup.backupIfDue(pool).catch((err) => console.error("Weekly backup failed:", err.message)), 3 * 3600 * 1000);
 });

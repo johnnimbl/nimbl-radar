@@ -49,6 +49,9 @@
   var jdEdits = {};                   // job description id -> unsaved field values
   var jdNew = {};                     // lead id -> "new job description" form open
   var jdBusy = 0;                     // saves in flight; a background reload must not overwrite them
+  var backupInfo = null;              // Google Drive backup status from the server
+  var backupOpen = false;             // backup panel open
+  var backupBusy = false;
   var uploading = {};                 // "leadId|contactId" -> number of uploads in flight
   var filesPending = 0;               // uploads/deletes in flight; a refresh must not overwrite them
   var FILE_EXTS = ["pdf", "png", "jpg", "jpeg", "webp", "gif", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv", "rtf"];
@@ -1095,6 +1098,74 @@
     jdApi("DELETE", "/api/job-descriptions/" + encodeURIComponent(jid)).catch(function (err) {
       jds.push(j); render(); toast("Couldn't delete: " + err.message);
     });
+  }
+
+  /* ---------------- Backups (Google Drive) ---------------- */
+
+  function loadBackupStatus() {
+    return fetch("/api/backup/status").then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (b) { if (b) { backupInfo = b; if (backupOpen) render(); } })
+      .catch(function () { /* optional */ });
+  }
+
+  function backupAgo(iso) {
+    if (!iso) return "never";
+    var days = Math.floor((Date.now() - Date.parse(iso)) / 86400000);
+    return days <= 0 ? "today" : days === 1 ? "yesterday" : days + " days ago";
+  }
+
+  function backupHealthy() {
+    var b = backupInfo;
+    return !!(b && b.connected && b.lastBackupAt && !b.lastError && Date.now() - Date.parse(b.lastBackupAt) < 9 * 86400000);
+  }
+
+  function renderBackupPanel() {
+    if (!backupOpen) return "";
+    var b = backupInfo || {};
+    var body;
+    if (!b.connected) {
+      body = '<p>Radar can save a full copy of everything (leads, contacts, notes, drafts, playbook, job descriptions and uploaded files) to your Google Drive every week.</p>' +
+        (b.configured === false ? '<p class="help">Google sign-in isn\'t set up on this server, so Drive can\'t be connected here.</p>'
+          : '<a class="btn btn-primary btn-sm" href="/auth/drive">Connect Google Drive</a>') +
+        '<p class="help">Radar can only see the files it creates. Backups go into a “Nimbl Radar backups” folder.</p>';
+    } else {
+      body = '<p><strong>Weekly backups to Google Drive are on</strong>' + (b.email ? ' (' + escapeHtml(b.email) + ')' : '') + '.</p>' +
+        '<p>Last backup: <strong>' + (b.lastBackupAt ? fmtDate(b.lastBackupAt.slice(0, 10)) + ' (' + backupAgo(b.lastBackupAt) + ')' : 'not yet') + '</strong>' +
+        (b.nextDueAt ? ' · next one due ' + fmtDate(b.nextDueAt.slice(0, 10)) : '') + '</p>' +
+        (b.lastError ? '<p class="bk-err">The last attempt failed: ' + escapeHtml(b.lastError) + '</p>' : '') +
+        '<div class="jd-actions">' +
+          '<button type="button" class="btn btn-sm btn-primary" data-action="backup-run"' + (backupBusy ? ' disabled' : '') + '>' + (backupBusy ? 'Backing up…' : 'Back up now') + '</button>' +
+          (b.folderUrl ? '<a class="btn-link" href="' + escapeHtml(b.folderUrl) + '" target="_blank" rel="noopener">Open Drive folder ↗</a>' : '') +
+          '<button type="button" class="btn-link" data-action="backup-disconnect">Disconnect</button>' +
+        '</div>' +
+        '<p class="help">Backups run when Radar is in use and the last one is a week old.</p>';
+    }
+    return '<div class="bk-panel" role="region" aria-label="Backups">' + body +
+      '<p class="help"><a href="/api/backup/download">Download a copy to this device</a></p></div>';
+  }
+
+  function runBackupNow() {
+    backupBusy = true; render();
+    fetch("/api/backup/run", { method: "POST" }).then(function (res) {
+      return res.json().then(function (d) { if (!res.ok) throw new Error(d.error || ("HTTP " + res.status)); return d; });
+    }).then(function () { toast("Backup saved to Google Drive."); })
+      .catch(function (err) { toast("Backup failed: " + err.message); })
+      .then(function () { backupBusy = false; return loadBackupStatus(); }).then(render);
+  }
+
+  function disconnectBackup() {
+    if (!window.confirm("Stop the weekly Google Drive backups? Backups already in Drive stay there.")) return;
+    fetch("/api/backup/disconnect", { method: "POST" }).then(function () { return loadBackupStatus(); }).then(function () { toast("Google Drive disconnected."); render(); });
+  }
+
+  function handleBackupReturn() {
+    var m = /[?&]backup=([^&]+)/.exec(window.location.search);
+    if (!m) return;
+    var v = decodeURIComponent(m[1]);
+    if (v === "connected") { toast("Google Drive connected. Your first backup is saved."); backupOpen = true; }
+    else if (v === "cancelled") toast("Google Drive wasn't connected.");
+    else toast("Couldn't connect Google Drive: " + v.replace(/^error:/, ""));
+    try { window.history.replaceState(null, "", window.location.pathname + window.location.hash); } catch (e) { /* ignore */ }
   }
 
   function renderContactsPanel(l) {
@@ -2521,10 +2592,12 @@
             '</div>' : '') +
           '<div class="scan-meta" title="A scan for new roles runs automatically every day">Last scanned<br><span class="mono">' + fmtDate(state.lastScanned) + '</span></div>' +
           '<button class="btn" type="button" data-action="refresh-scan" title="Load the newest leads from the daily scan">↻ Refresh</button>' +
+          '<button class="btn bk-btn" type="button" data-action="backup-toggle" aria-expanded="' + backupOpen + '" title="Google Drive backups"><span class="bk-dot ' + (backupHealthy() ? 'ok' : 'warn') + '" aria-hidden="true"></span>Backup</button>' +
           (readOnly ? "" : '<button class="btn btn-primary" type="button" data-action="open-add">+ Add lead</button>') +
         '</div>' +
       '</div>' +
       (readOnly ? '<div class="readonly-note">This view is read-only — open the artifact in claude.ai as its owner to edit statuses, notes, and contacts.</div>' : '') +
+      renderBackupPanel() +
       renderViewTabs() +
       (view === "pipeline" ? renderCrm() : view === "crm" ? renderClients() : view === "playbook" ? renderPlaybook() : (
       renderNewBanner() +
@@ -3086,6 +3159,9 @@
     if (action === "crm-open") { openClient(id); return; }
     if (action === "crm-back") { closeClient(); return; }
     if (action === "contact-checked") { markContactChecked(id, cid); return; }
+    if (action === "backup-toggle") { backupOpen = !backupOpen; render(); if (backupOpen) loadBackupStatus(); return; }
+    if (action === "backup-run") { runBackupNow(); return; }
+    if (action === "backup-disconnect") { disconnectBackup(); return; }
     if (action === "jd-new") { jdNew[id] = true; render(); var nu = document.getElementById("jd-new-text-" + id); if (nu) nu.focus(); return; }
     if (action === "jd-new-cancel") { jdNew[id] = false; render(); return; }
     if (action === "jd-create") { createJd(id); return; }
@@ -3346,6 +3422,8 @@
       loadPlaybook();
       loadFiles();
       loadJds();
+      handleBackupReturn();
+      loadBackupStatus().then(render);
     }).catch(function (err) {
       document.getElementById("app").innerHTML =
         '<div class="empty">Couldn\'t load data from the server: ' + escapeHtml(err.message) + '. Is the API running and DATABASE_URL configured?</div>';
