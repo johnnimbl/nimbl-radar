@@ -34,6 +34,8 @@
   chrome.storage.local.get({ panelOpen: true, panelWide: false }).then((v) => { S.open = v.panelOpen; S.wide = v.panelWide; render(); });
 
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  // "kai@nimbl.ai" -> " · by Kai" (who logged it in Radar; older entries have no author)
+  const byWho = (e) => { e = String(e || ""); if (!e) return ""; const n = e.includes("@") ? e.split("@")[0].split(/[._-]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ") : e; return " · by " + esc(n); };
   const api = (method, path, body) => chrome.runtime.sendMessage({ type: "api", method, path, body });
   const text = (el) => (el ? (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim() : "");
   const visible = (el) => !!(el && el.isConnected && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -285,7 +287,7 @@
     const timeline = acts.length
       ? '<div class="sec"><h3>' + (S.wide ? "Timeline with " + esc(c.name.split(" ")[0]) : "Recent") + '</h3><ul class="acts">' + acts.slice(0, S.wide ? 25 : 3).map((a) => {
           const full = S.wide ? (a.summary || "") : (a.summary || "").slice(0, 160) + (a.summary && a.summary.length > 160 ? "…" : "");
-          return '<li><div class="meta">' + esc(a.date) + " · " + esc(a.type) + (a.direction === "Inbound" ? " · from them" : "") + '</div><div class="act-text">' + esc(full) + "</div></li>";
+          return '<li><div class="meta">' + esc(a.date) + " · " + esc(a.type) + (a.direction === "Inbound" ? " · from them" : "") + byWho(a.author) + '</div><div class="act-text">' + esc(full) + "</div></li>";
         }).join("") + "</ul></div>"
       : "";
     if (!S.wide) {
@@ -350,7 +352,7 @@
     }
     const notes = card.notes || [];
     if (notes.length) {
-      h += '<div class="sec"><h3>Notes</h3><ul class="acts">' + notes.map((n) => '<li><div class="meta">' + esc(n.date) + '</div><div class="act-text">' + esc(n.text) + "</div></li>").join("") + "</ul></div>";
+      h += '<div class="sec"><h3>Notes</h3><ul class="acts">' + notes.map((n) => '<li><div class="meta">' + esc(n.date) + byWho(n.author) + '</div><div class="act-text">' + esc(n.text) + "</div></li>").join("") + "</ul></div>";
     }
     return h;
   }

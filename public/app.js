@@ -106,6 +106,23 @@
   var pageSize = PAGE_SIZE_STEP;
   var readOnly = false;
   var currentUser = null; // { email, name, photo } when Google sign-in is on; null otherwise
+  var isOwner = true;       // only the owner connects Drive, manages everyone's keys and changes tracked roles
+  var historyOpen = {};     // client card: lead id -> change history showing
+  var historyData = {};     // lead id -> { items, loading, error, limit }
+
+  // Who did something, as people read it: "you", "Kai", "Claude". Old entries have no author.
+  function myEmail() { return currentUser && currentUser.email ? String(currentUser.email).toLowerCase() : ""; }
+  function whoName(email) {
+    var e = String(email || "").trim();
+    if (!e) return "";
+    if (e.indexOf("@") === -1) return e;
+    if (myEmail() && e.toLowerCase() === myEmail()) return "you";
+    return e.split("@")[0].split(/[._-]+/).filter(Boolean).map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
+  }
+  function byHtml(email, cls) {
+    var n = whoName(email);
+    return n ? '<span class="' + (cls || "by") + '" title="' + escapeHtml(email) + '">by ' + escapeHtml(n) + '</span>' : "";
+  }
 
   function escapeHtml(s) {
     if (s === null || s === undefined) return "";
@@ -592,14 +609,14 @@
 
   function renderCaptureBar() {
     var roleChips = state.roleTypes.map(function (r) {
-      return '<span class="role-chip">' + escapeHtml(r) + (readOnly ? "" : ' <button type="button" data-action="remove-role" data-role="' + escapeHtml(r) + '" aria-label="Stop tracking ' + escapeHtml(r) + '">×</button>') + '</span>';
+      return '<span class="role-chip">' + escapeHtml(r) + (readOnly || !isOwner ? "" : ' <button type="button" data-action="remove-role" data-role="' + escapeHtml(r) + '" aria-label="Stop tracking ' + escapeHtml(r) + '">×</button>') + '</span>';
     }).join("");
     var roleOpts = state.roleTypes.map(function (r) { return '<option value="' + escapeHtml(r) + '">' + escapeHtml(r) + '</option>'; }).join("");
     return '' +
       '<div class="capture-bar">' +
         '<div class="capture-row">' +
           '<span class="lbl">Tracking</span>' + roleChips +
-          (readOnly ? "" : '<input type="text" id="cap-role-name" placeholder="Add a role to track…" style="width:180px"><button class="btn btn-sm" type="button" data-action="add-role">+ Track role</button>') +
+          (readOnly || !isOwner ? "" : '<input type="text" id="cap-role-name" placeholder="Add a role to track…" style="width:180px"><button class="btn btn-sm" type="button" data-action="add-role">+ Track role</button>') +
         '</div>' +
         (readOnly ? "" : (
         '<div class="capture-row">' +
@@ -694,6 +711,7 @@
         '<div class="act-top">' +
           '<span class="act-type">' + escapeHtml(a.type) + '</span>' +
           (a.type === "Note" ? "" : '<span class="act-dir ' + (inbound ? "act-in" : "act-out") + '">' + (inbound ? "↙ In" : "↗ Out") + '</span>') +
+          byHtml(a.author, "by act-by") +
           '<span class="act-date">' + fmtDate(a.date) + '</span>' +
           (readOnly ? "" : '<button type="button" class="act-del" data-action="remove-activity" data-id="' + l.id + '" data-cid="' + c.id + '" data-aid="' + escapeHtml(a.id) + '" aria-label="Delete activity">✕</button>') +
         '</div>' +
@@ -776,6 +794,7 @@
           renderSequenceBlock(l, c) +
           '<div class="ct-meta">' +
             '<span>Last contacted: <strong>' + (c.lastContacted ? fmtDate(c.lastContacted) : "never") + '</strong></span>' +
+            (whoName(c.addedBy) ? '<span>Added by ' + escapeHtml(whoName(c.addedBy)) + '</span>' : '') +
             '<label>Next follow-up <input type="date" value="' + escapeHtml(c.nextFollowUp || "") + '" data-action="set-followup" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></label>' +
             dueBadgeFor(c) +
             (linkedinOk ? '<a href="' + escapeHtml(c.linkedin) + '" target="_blank" rel="noopener">LinkedIn ↗</a>' : '') +
@@ -833,7 +852,7 @@
       '<span class="file-ext">' + escapeHtml((f.ext || fileExt(f.name) || "file").toUpperCase()) + '</span>' +
       '<a class="file-name" href="/api/files/' + encodeURIComponent(f.id) + '" target="_blank" rel="noopener">' + escapeHtml(f.name) + '</a>' +
       owner +
-      '<span class="file-meta">' + fmtSize(f.size) + ' · ' + fmtDate((f.uploadedAt || "").slice(0, 10)) + '</span>' +
+      '<span class="file-meta">' + fmtSize(f.size) + ' · ' + fmtDate((f.uploadedAt || "").slice(0, 10)) + (whoName(f.uploadedBy) ? ' · by ' + escapeHtml(whoName(f.uploadedBy)) : '') + '</span>' +
       (readOnly ? "" : '<button type="button" class="act-del" data-action="file-remove" data-fid="' + escapeHtml(f.id) + '" aria-label="Delete file ' + escapeHtml(f.name) + '">✕</button>') +
     '</div>';
   }
@@ -1030,6 +1049,7 @@
           '<span class="jd-title">' + escapeHtml(jdTitle(j)) + '</span>' +
           '<span class="jd-chip ' + (ready ? 'jd-ready' : 'jd-wait') + '">' + (ready ? 'Ready' : 'Waiting for Claude') + '</span>' +
           (dirty ? '<span class="jd-chip jd-wait">Unsaved</span>' : '') +
+          byHtml(j.createdBy) +
         '</div>' +
         '<div class="jd-row jd-btns">' +
           (ready ? '<a class="btn btn-sm btn-primary" href="' + pdf + '?download=1" data-action="jd-download">Download PDF</a><a class="btn-link" href="' + pdf + '" target="_blank" rel="noopener">Preview ↗</a>' : '') +
@@ -1128,7 +1148,7 @@
     if (!b.connected) {
       body = '<p>Radar can save a full copy of everything (leads, contacts, notes, drafts, playbook, job descriptions and uploaded files) to your Google Drive every week.</p>' +
         (b.configured === false ? '<p class="help">Google sign-in isn\'t set up on this server, so Drive can\'t be connected here.</p>'
-          : '<a class="btn btn-primary btn-sm" href="/auth/drive">Connect Google Drive</a>') +
+          : (isOwner ? '<a class="btn btn-primary btn-sm" href="/auth/drive">Connect Google Drive</a>' : '<p class="help">Only the Radar owner can connect Google Drive.</p>')) +
         '<p class="help">Radar can only see the files it creates. Backups go into a “Nimbl Radar backups” folder.</p>';
     } else {
       body = '<p><strong>Weekly backups to Google Drive are on</strong>' + (b.email ? ' (' + escapeHtml(b.email) + ')' : '') + '.</p>' +
@@ -1138,7 +1158,7 @@
         '<div class="jd-actions">' +
           '<button type="button" class="btn btn-sm btn-primary" data-action="backup-run"' + (backupBusy ? ' disabled' : '') + '>' + (backupBusy ? 'Backing up…' : 'Back up now') + '</button>' +
           (b.folderUrl ? '<a class="btn-link" href="' + escapeHtml(b.folderUrl) + '" target="_blank" rel="noopener">Open Drive folder ↗</a>' : '') +
-          '<button type="button" class="btn-link" data-action="backup-disconnect">Disconnect</button>' +
+          (isOwner ? '<button type="button" class="btn-link" data-action="backup-disconnect">Disconnect</button>' : '') +
         '</div>' +
         '<p class="help">Backups run when Radar is in use and the last one is a week old.</p>';
     }
@@ -1156,7 +1176,9 @@
   function renderExtensionSettings() {
     var keys = extKeys || [];
     var list = keys.map(function (k) {
+      var mine = String(k.createdBy || "").toLowerCase() === myEmail();
       return '<li><span class="mono">' + escapeHtml(k.prefix) + '…</span> ' + escapeHtml(k.label || "Chrome extension") +
+        (isOwner && k.createdBy && !mine ? ' <strong>' + escapeHtml(whoName(k.createdBy)) + '</strong>' : '') +
         '<span class="help"> · created ' + fmtDate(String(k.createdAt).slice(0, 10)) + (k.lastUsedAt ? ', last used ' + fmtDate(String(k.lastUsedAt).slice(0, 10)) : ', not used yet') + '</span>' +
         (readOnly ? '' : ' <button type="button" class="btn-link jd-del" data-action="ext-key-revoke" data-value="' + escapeHtml(k.id) + '">Revoke</button>') + '</li>';
     }).join("");
@@ -1167,7 +1189,7 @@
       '3. Create a key below and paste it into the extension.</p>' +
       (extNewKey ? '<div class="ext-key"><p><strong>Your new key</strong> (shown once, copy it now):</p><code class="mono" id="ext-new-key">' + escapeHtml(extNewKey) + '</code>' +
         '<div class="jd-actions"><button type="button" class="btn btn-sm btn-primary" data-action="ext-key-copy">Copy key</button><button type="button" class="btn-link" data-action="ext-key-hide">Done</button></div></div>' : '') +
-      (list ? '<ul class="ext-keys">' + list + '</ul>' : '') +
+      (list ? (isOwner && keys.some(function (k) { return String(k.createdBy || "").toLowerCase() !== myEmail(); }) ? '<p class="help">Everyone\'s keys are listed. Revoke one to cut off that browser straight away.</p>' : '') + '<ul class="ext-keys">' + list + '</ul>' : '') +
       (readOnly ? '' : '<div class="jd-actions"><button type="button" class="btn btn-sm" data-action="ext-key-new">Create a key for this browser</button></div>');
   }
 
@@ -1345,7 +1367,7 @@
     var primary = l.contacts && l.contacts.length ? l.contacts[0] : null;
     var mailto = primary && primary.email ? '<a href="mailto:' + escapeHtml(primary.email) + '">Email ' + escapeHtml(primary.name || l.company) + ' ↗</a>' : "";
     var notesHtml = l.notes.slice().reverse().map(function (n) {
-      return '<div class="note"><div class="d">' + fmtDate(n.date) + '</div>' + escapeHtml(n.text) + '</div>';
+      return '<div class="note"><div class="d">' + fmtDate(n.date) + (whoName(n.author) ? ' · by ' + escapeHtml(whoName(n.author)) : '') + '</div>' + escapeHtml(n.text) + '</div>';
     }).join("") || '<div class="note" style="color:var(--ink-soft)">No notes yet.</div>';
     var isWon = l.status === "Won";
     var d = readOnly ? " disabled" : "";
@@ -1773,7 +1795,7 @@
     if (!l || !hit) return;
     var x = hit.draft.meta || {};
     var cid = "c" + Date.now().toString(36);
-    l.contacts.push({ id: cid, name: x.name || "", title: x.title || "", email: "", phone: "", linkedin: x.linkedin || "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", sequenceStep: 0, isPrimary: false, agentFound: true, sourceUrl: x.source || "", activities: [] });
+    l.contacts.push({ id: cid, name: x.name || "", title: x.title || "", email: "", phone: "", linkedin: x.linkedin || "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", sequenceStep: 0, isPrimary: false, agentFound: true, sourceUrl: x.source || "", addedBy: myEmail(), activities: [] });
     closeDraft(id, "used");
     persist();
     toast((x.name || "Contact") + " added to " + l.company + ".");
@@ -2266,14 +2288,14 @@
   function renderTimeline(l) {
     var items = [];
     (l.contacts || []).forEach(function (c) {
-      (c.activities || []).forEach(function (a, i) { items.push({ date: a.date || "", i: i, who: c.name || "(unnamed contact)", type: a.type, dir: a.direction, text: a.summary || "", cid: c.id, aid: a.id }); });
+      (c.activities || []).forEach(function (a, i) { items.push({ date: a.date || "", i: i, who: c.name || "(unnamed contact)", type: a.type, dir: a.direction, text: a.summary || "", cid: c.id, aid: a.id, by: a.author }); });
     });
-    (l.notes || []).forEach(function (n, i) { items.push({ date: n.date || "", i: i, who: "Company note", type: "Note", dir: "", text: n.text || "", company: true }); });
+    (l.notes || []).forEach(function (n, i) { items.push({ date: n.date || "", i: i, who: "Company note", type: "Note", dir: "", text: n.text || "", company: true, by: n.author }); });
     items.sort(function (a, b) { var dc = b.date.localeCompare(a.date); return dc !== 0 ? dc : b.i - a.i; });
     var shown = items.slice(0, tlLimit);
     var rows = shown.map(function (it) {
       var dirHtml = it.type === "Note" ? "" : '<span class="act-dir ' + (it.dir === "Inbound" ? "act-in" : "act-out") + '">' + (it.dir === "Inbound" ? "↙ In" : "↗ Out") + '</span>';
-      return '<div class="tl-item"><div class="tl-date">' + fmtDate(it.date) + '</div><div class="tl-main"><div class="tl-head"><span class="tl-who' + (it.company ? " tl-co" : "") + '">' + escapeHtml(it.who) + '</span><span class="tl-type">' + escapeHtml(it.type) + '</span>' + dirHtml +
+      return '<div class="tl-item"><div class="tl-date">' + fmtDate(it.date) + '</div><div class="tl-main"><div class="tl-head"><span class="tl-who' + (it.company ? " tl-co" : "") + '">' + escapeHtml(it.who) + '</span><span class="tl-type">' + escapeHtml(it.type) + '</span>' + dirHtml + byHtml(it.by) +
         (readOnly || !it.aid ? "" : '<button type="button" class="act-del" data-action="remove-activity" data-id="' + l.id + '" data-cid="' + it.cid + '" data-aid="' + escapeHtml(it.aid) + '" aria-label="Delete activity">✕</button>') + '</div>' +
         (it.text ? '<div class="tl-text">' + escapeHtml(it.text) + '</div>' : '') + '</div></div>';
     }).join("");
@@ -2281,6 +2303,47 @@
     var note = readOnly ? "" : '<div class="add-note"><textarea id="note-input-' + l.id + '" placeholder="Add a note about this company: a call, an insight, a reminder…"></textarea><button class="btn btn-sm btn-primary" type="button" data-action="add-note" data-id="' + l.id + '">Add note</button></div>';
     return '<section class="cc-sec"><h3>Activity &amp; notes</h3>' + note +
       '<div class="tl">' + (rows || '<div class="ag-empty">Nothing logged yet. Log a touch from a contact above, or add a note.</div>') + '</div>' + more + '</section>';
+  }
+
+  // Change history: who changed what on this company, newest first (from the server's audit log).
+  function loadHistory(id) {
+    var h = historyData[id] || (historyData[id] = { items: null, limit: 15 });
+    h.loading = true; h.error = "";
+    return fetch("/api/leads/" + encodeURIComponent(id) + "/history").then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function (d) { h.items = d.items || []; })
+      .catch(function (err) { h.error = err.message; })
+      .then(function () { h.loading = false; if (historyOpen[id]) render(); });
+  }
+  function refreshOpenHistory() {
+    Object.keys(historyOpen).forEach(function (id) { if (historyOpen[id]) loadHistory(id); });
+  }
+  function fmtWhen(iso) {
+    var d = new Date(iso);
+    if (isNaN(d)) return "";
+    var day = fmtDate(iso.slice(0, 10));
+    var hh = d.getHours(), mm = d.getMinutes();
+    return day + ', ' + (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm;
+  }
+  function renderHistory(l) {
+    var open = !!historyOpen[l.id];
+    var h = historyData[l.id] || {};
+    var head = '<div class="hist-head"><h3>History</h3><button type="button" class="btn-link" data-action="history-toggle" data-id="' + l.id + '" aria-expanded="' + open + '">' + (open ? 'Hide' : 'Show who changed what') + '</button></div>';
+    if (!open) return '<section class="cc-sec hist">' + head + '</section>';
+    var body;
+    if (!h.items) body = '<div class="ag-empty">' + (h.error ? "Couldn't load the history: " + escapeHtml(h.error) : 'Loading…') + '</div>';
+    else if (!h.items.length) body = '<div class="ag-empty">No changes recorded yet. From now on, every change to this company is listed here with who made it.</div>';
+    else {
+      var shown = h.items.slice(0, h.limit || 15);
+      body = '<ol class="hist-list">' + shown.map(function (x) {
+        return '<li><span class="hist-who">' + escapeHtml(whoName(x.actor) || "Someone") + '</span>' +
+          '<span class="hist-what">' + escapeHtml(x.detail) + '</span>' +
+          '<time class="hist-when" datetime="' + escapeHtml(x.at) + '">' + escapeHtml(fmtWhen(x.at)) + '</time></li>';
+      }).join("") + '</ol>' +
+        (h.items.length > shown.length ? '<button type="button" class="btn btn-sm" data-action="history-more" data-id="' + l.id + '">Show more (' + (h.items.length - shown.length) + ' older)</button>' : '');
+    }
+    return '<section class="cc-sec hist">' + head + body + '</section>';
   }
 
   function renderClientCard(l) {
@@ -2381,6 +2444,7 @@
           '<div class="cc-main">' +
             '<section class="cc-sec"><h3>People &amp; outreach plan</h3>' + people + '</section>' +
             renderTimeline(l) +
+            renderHistory(l) +
           '</div>' +
           '<aside class="cc-side">' + company +
             '<section class="cc-sec"><h3>Job descriptions</h3>' + renderJdPanel(l) + '</section>' +
@@ -2717,6 +2781,7 @@
       delete freshState.conflicts;
       state = freshState;
       if (conflicts.length || !userIsEditing()) render();
+      refreshOpenHistory();
     }).catch(function (err) {
       saveInFlight = false;
       dirty = true; // keep the edits; they go out with the next save
@@ -2752,7 +2817,7 @@
   function addContact(id) {
     var l = findLead(id);
     if (!l) return;
-    l.contacts.push({ id: "c" + Date.now().toString(36), name: "", title: "", email: "", phone: "", linkedin: "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", sequenceStep: 0, isPrimary: false, activities: [] });
+    l.contacts.push({ id: "c" + Date.now().toString(36), name: "", title: "", email: "", phone: "", linkedin: "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", sequenceStep: 0, isPrimary: false, addedBy: myEmail(), activities: [] });
     var newId = l.contacts[l.contacts.length - 1].id;
     ctOpen[newId] = true;
     persist();
@@ -2827,7 +2892,7 @@
     var date = isIsoDate(f.date) ? f.date : todayStr();
     c.activities.push({
       id: newActId(),
-      type: f.type, direction: f.direction, date: date, summary: (f.summary || "").trim()
+      type: f.type, direction: f.direction, date: date, summary: (f.summary || "").trim(), author: myEmail()
     });
     c.lastContacted = latestTouchDate(c);
     if (f.type !== "Note") c.agentFound = false; // you have dealt with this person, so the title was checked
@@ -2874,7 +2939,7 @@
       else if (!cadence && due) c.nextFollowUp = "";
     }
     if (!c.activities) c.activities = [];
-    c.activities.push({ id: newActId(), type: "Note", direction: "Outbound", date: today, summary: "Stage changed: " + prev + " → " + stage });
+    c.activities.push({ id: newActId(), type: "Note", direction: "Outbound", date: today, summary: "Stage changed: " + prev + " → " + stage, author: myEmail() });
     autoAdvanceLead(l, stage);
     persist();
   }
@@ -2886,7 +2951,7 @@
     if (!nt) return;
     var today = todayStr();
     c.activities = c.activities || [];
-    c.activities.push({ id: newActId(), type: "Note", direction: "Outbound", date: today, summary: "Skipped touch " + nt.n + " (" + nt.name + ")" });
+    c.activities.push({ id: newActId(), type: "Note", direction: "Outbound", date: today, summary: "Skipped touch " + nt.n + " (" + nt.name + ")", author: myEmail() });
     c.sequenceStep = nt.n;
     var nxt = sequenceFollowUp(c, c.stage || "Not contacted", seqStep(c), today);
     if (nxt) c.nextFollowUp = nxt;
@@ -3120,7 +3185,7 @@
     var text = el.value.trim();
     if (!text) return;
     var today = new Date().toISOString().slice(0, 10);
-    l.notes.push({ date: today, text: text });
+    l.notes.push({ date: today, text: text, author: myEmail() });
     persist();
   }
 
@@ -3244,6 +3309,8 @@
     if (action === "card-more") { cardMore = !cardMore; render(); return; }
     if (action === "ct-toggle") { if (ctOpen[cid]) { delete ctOpen[cid]; } else { ctOpen[cid] = true; } render(); return; }
     if (action === "tl-more") { tlLimit += 12; render(); return; }
+    if (action === "history-toggle") { historyOpen[id] = !historyOpen[id]; if (historyOpen[id]) loadHistory(id); render(); return; }
+    if (action === "history-more") { var hd = historyData[id]; if (hd) hd.limit = (hd.limit || 15) + 25; render(); return; }
     if (action === "card-status") { setStatus(id, t.getAttribute("data-value")); return; }
     if (action === "card-priority") { setPriority(id, t.getAttribute("data-value")); return; }
     if (action === "show-more") { showMore(); return; }
@@ -3473,6 +3540,7 @@
     }).then(function (who) {
       if (!who) return; // redirecting to login
       currentUser = who.user || null;
+      isOwner = who.isOwner !== false;
       return fetch("/api/state").then(function (res) {
         if (res.status === 401) { window.location.href = "/auth/login"; return null; }
         if (!res.ok) throw new Error("HTTP " + res.status);

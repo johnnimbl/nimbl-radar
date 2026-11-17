@@ -614,3 +614,17 @@ th.cl-col-last{white-space:nowrap;}
 .ext-key{border:1px dashed var(--ink);border-radius:10px;padding:10px 12px;background:var(--paper);display:flex;flex-direction:column;gap:8px;}
 .ext-key code{word-break:break-all;font-size:.8rem;background:var(--surface-2);padding:6px 8px;border-radius:6px;}
 .ext-keys{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;font-size:.82rem;}
+
+/* Who did it: "by Kai" on touches, notes, job descriptions; and the client card's change history */
+.by{font-size:.68rem;color:var(--ink-soft);white-space:nowrap;}
+.act-by{margin-left:auto;}
+.act-by + .act-date{margin-left:6px;}
+.hist-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;}
+.hist-head h3{margin-bottom:0;}
+.hist-list{list-style:none;margin:10px 0 8px;padding:0;display:flex;flex-direction:column;}
+.hist-list li{display:grid;grid-template-columns:minmax(64px,auto) 1fr auto;gap:4px 12px;align-items:baseline;padding:7px 0;border-top:1px solid rgba(13,1,41,.14);font-size:.8rem;}
+.hist-list li:first-child{border-top:0;}
+.hist-who{font-weight:700;}
+.hist-what{overflow-wrap:anywhere;}
+.hist-when{font-size:.7rem;color:var(--ink-soft);white-space:nowrap;font-variant-numeric:tabular-nums;}
+@media (max-width:560px){.hist-list li{grid-template-columns:1fr auto;}.hist-what{grid-column:1 / -1;grid-row:2;}}

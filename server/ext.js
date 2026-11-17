@@ -42,7 +42,8 @@ do $$ declare t text; begin
   end loop;
 end $$;`;
 
-async function ensureSchema(pool) { await pool.query(SCHEMA); }
+const AUDIT_SCHEMA = require("fs").readFileSync(require("path").join(__dirname, "audit_schema.sql"), "utf8");
+async function ensureSchema(pool) { await pool.query(SCHEMA); await pool.query(AUDIT_SCHEMA); }
 
 const hash = (k) => crypto.createHash("sha256").update(k).digest("hex");
 
@@ -89,7 +90,7 @@ function leadCard(lead, people, notes, alerts, jds) {
     companyProfile: lead.company_profile || "", nearshoreFit: lead.nearshore_fit || "",
     linkedin: ci.linkedin || "", linkedinSummary: ci.linkedinSummary || "",
     people: (people || []).map((p) => ({ id: p.id, name: p.name, title: p.title, stage: p.stage, linkedin: p.linkedin, isPrimary: p.is_primary, nextFollowUp: dstr(p.next_follow_up) })),
-    notes: (notes || []).map((n) => ({ date: dstr(n.note_date), text: n.text })),
+    notes: (notes || []).map((n) => ({ date: dstr(n.note_date), text: n.text, author: n.author || "" })),
     roles: (alerts || []).map((a) => ({ title: a.job_title, url: a.job_url, date: dstr(a.date_posted) || dstr(a.found_at), seen: !!a.seen_at })),
     jobDescriptions: (jds || []).map((j) => ({ id: j.id, title: (j.content && j.content.title) || "Job description", status: j.status })),
   };
@@ -102,7 +103,7 @@ function contactJson(c, lead, drafts, acts) {
     agentFound: c.agent_found, sourceUrl: c.source_url || "",
     lead: lead ? { id: lead.id, company: lead.company, status: lead.status, priority: lead.priority, inCrm: lead.in_crm, jobTitle: lead.job_title } : null,
     drafts: (drafts || []).map((d) => ({ id: d.id, kind: d.kind, touch: d.touch, body: d.body, why: (d.meta && d.meta.why) || "" })),
-    activities: (acts || []).map((a) => ({ type: a.type, direction: a.direction, date: dstr(a.activity_date), summary: a.summary })),
+    activities: (acts || []).map((a) => ({ type: a.type, direction: a.direction, date: dstr(a.activity_date), summary: a.summary, author: a.author || "" })),
   };
 }
 
@@ -118,7 +119,7 @@ async function loadContact(pool, id) {
     // The bigger "client card" view in the extension shows the company around this person.
     const [people, notes, alerts, jds] = await Promise.all([
       pool.query("select id, name, title, stage, linkedin, is_primary, next_follow_up from contacts where lead_id = $1 order by sort_order, id", [lead.id]),
-      pool.query("select note_date, text from lead_notes where lead_id = $1 order by note_date desc nulls last, sort_order desc limit 6", [lead.id]),
+      pool.query("select note_date, text, author from lead_notes where lead_id = $1 order by note_date desc nulls last, sort_order desc limit 6", [lead.id]),
       pool.query("select job_title, job_url, date_posted, found_at, seen_at from role_alerts where lead_id = $1 order by found_at desc limit 6", [lead.id]),
       pool.query("select id, content, status from job_descriptions where lead_id = $1 order by created_at desc", [lead.id]).catch(() => ({ rows: [] })),
     ]);

@@ -4,7 +4,8 @@ const express = require("express");
 const passport = require("passport");
 const { pool } = require("./db");
 const { buildSession } = require("./session");
-const { getState, putState } = require("./state");
+const { getState, putState, leadHistory } = require("./state");
+const { emailOf, isOwner, requireOwner, actorPool, testUser } = require("./actor");
 const { listPlaybook, upsertPlaybookItem, deletePlaybookItem } = require("./playbook");
 const { listFiles, saveFile, getFile, deleteFile, MAX_FILE_BYTES } = require("./files");
 const { listJds, getJd, createJd, updateJd, deleteJd } = require("./jds");
@@ -90,9 +91,12 @@ app.post("/auth/logout", (req, res) => {
 });
 
 app.get("/auth/me", (req, res) => {
-  if (!googleLoginEnabled) return res.json({ enabled: false });
+  if (!googleLoginEnabled) {
+    const t = testUser(req);
+    return res.json({ enabled: false, user: t || null, isOwner: isOwner(req) });
+  }
   if (req.isAuthenticated && req.isAuthenticated()) {
-    return res.json({ enabled: true, user: req.user });
+    return res.json({ enabled: true, user: req.user, isOwner: isOwner(req) });
   }
   res.status(401).json({ enabled: true, user: null });
 });
@@ -114,16 +118,28 @@ app.get("/api/state", ensureAuthenticated, async (req, res) => {
 
 // --- Chrome extension: keys (managed in Radar) and the key-authenticated API ----
 app.get("/api/extension-keys", ensureAuthenticated, async (req, res) => {
-  try { res.json({ items: await ext.listKeys(pool) }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to load keys." }); }
+  try {
+    // The owner sees and can revoke everyone's keys; everyone else only their own.
+    const all = await ext.listKeys(pool);
+    const me = emailOf(req);
+    res.json({ items: isOwner(req) ? all : all.filter((k) => String(k.createdBy || "").toLowerCase() === me) });
+  } catch (err) { console.error(err); res.status(500).json({ error: "Failed to load keys." }); }
 });
 app.post("/api/extension-keys", ensureAuthenticated, async (req, res) => {
-  try { res.json({ key: await ext.createKey(pool, (req.body || {}).label, req.user && req.user.email) }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to create a key." }); }
+  try { res.json({ key: await ext.createKey(pool, (req.body || {}).label, emailOf(req)) }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to create a key." }); }
 });
 app.delete("/api/extension-keys/:id", ensureAuthenticated, async (req, res) => {
-  try { await ext.revokeKey(pool, req.params.id); res.json({ ok: true }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to revoke the key." }); }
+  try {
+    if (!isOwner(req)) {
+      const mine = (await ext.listKeys(pool)).some((k) => String(k.id) === String(req.params.id) && String(k.createdBy || "").toLowerCase() === emailOf(req));
+      if (!mine) return res.status(403).json({ error: "You can only revoke your own keys." });
+    }
+    await ext.revokeKey(pool, req.params.id); res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: "Failed to revoke the key." }); }
 });
 const extApi = express.Router();
 extApi.use(ext.keyAuth(pool));
+const as = (req) => actorPool(pool, req.extUser || "");
 const wrap = (fn) => async (req, res) => {
   try { res.json(await fn(req)); } catch (err) {
     if (!err.status) console.error(err);
@@ -131,17 +147,17 @@ const wrap = (fn) => async (req, res) => {
   }
 };
 extApi.get("/ping", wrap(async (req) => ({ ok: true, user: req.extUser })));
-extApi.get("/lookup", wrap((req) => ext.lookup(pool, req.query)));
+extApi.get("/lookup", wrap((req) => ext.lookup(as(req), req.query)));
 extApi.get("/leads", wrap(async (req) => ({ items: await ext.searchLeads(pool, req.query.q) })));
-extApi.post("/contacts", wrap((req) => ext.addContact(pool, req.body || {})));
-extApi.post("/contacts/:id/checked", wrap((req) => ext.markChecked(pool, req.params.id)));
-extApi.post("/activities", wrap((req) => ext.logActivity(pool, req.body || {})));
-extApi.post("/notes", wrap((req) => ext.addNote(pool, req.body || {})));
+extApi.post("/contacts", wrap((req) => ext.addContact(as(req), req.body || {})));
+extApi.post("/contacts/:id/checked", wrap((req) => ext.markChecked(as(req), req.params.id)));
+extApi.post("/activities", wrap((req) => ext.logActivity(as(req), req.body || {})));
+extApi.post("/notes", wrap((req) => ext.addNote(as(req), req.body || {})));
 extApi.post("/job-descriptions", wrap(async (req) => {
   const b = req.body || {};
   const lead = await pool.query("select id from leads where id = $1", [String(b.leadId || "")]);
   if (!lead.rows.length) throw Object.assign(new Error("Pick a company in Radar first."), { status: 400 });
-  return createJd(pool, b.leadId, { sourceUrl: b.sourceUrl, sourceText: b.sourceText }, { email: req.extUser || "" });
+  return createJd(as(req), b.leadId, { sourceUrl: b.sourceUrl, sourceText: b.sourceText }, { email: req.extUser || "" });
 }));
 extApi.get("/job-descriptions/:id/pdf", async (req, res) => {
   try {
@@ -155,13 +171,13 @@ extApi.get("/job-descriptions/:id/pdf", async (req, res) => {
 app.use("/api/ext", extApi);
 
 // --- Backups (Google Drive + download) ----------------------------------------
-app.get("/auth/drive", ensureAuthenticated, (req, res) => {
+app.get("/auth/drive", ensureAuthenticated, requireOwner, (req, res) => {
   if (!backup.driveConfigured()) return res.status(400).send("Google sign-in isn't configured on this server.");
   const state = crypto.randomBytes(16).toString("hex");
   req.session.driveState = state;
   req.session.save(() => res.redirect(backup.authUrl(state, req.user && req.user.email)));
 });
-app.get("/auth/drive/callback", ensureAuthenticated, async (req, res) => {
+app.get("/auth/drive/callback", ensureAuthenticated, requireOwner, async (req, res) => {
   const expected = req.session && req.session.driveState;
   if (req.session) delete req.session.driveState;
   if (req.query.error) return res.redirect("/?backup=" + encodeURIComponent("cancelled"));
@@ -181,7 +197,7 @@ app.get("/api/backup/status", ensureAuthenticated, async (req, res) => {
 app.post("/api/backup/run", ensureAuthenticated, async (req, res) => {
   try { res.json(await backup.runBackup(pool, "manual")); } catch (err) { console.error(err); res.status(500).json({ error: String(err.message || err) }); }
 });
-app.post("/api/backup/disconnect", ensureAuthenticated, async (req, res) => {
+app.post("/api/backup/disconnect", ensureAuthenticated, requireOwner, async (req, res) => {
   try { await backup.disconnect(pool); res.json({ ok: true }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to disconnect." }); }
 });
 app.get("/api/backup/download", ensureAuthenticated, async (req, res) => {
@@ -195,7 +211,7 @@ app.get("/api/backup/download", ensureAuthenticated, async (req, res) => {
 
 app.put("/api/state", ensureAuthenticated, async (req, res) => {
   try {
-    const result = await putState(pool, req.body || {});
+    const result = await putState(pool, req.body || {}, { actor: emailOf(req), isOwner: isOwner(req) });
     const fresh = await getState(pool);
     fresh.conflicts = result.conflicts || [];
     res.json(fresh);
@@ -258,7 +274,7 @@ app.post(
         contactId: req.query.contactId,
         rawName: req.get("X-File-Name"),
         body: req.body,
-        uploadedBy: req.user && req.user.email,
+        uploadedBy: emailOf(req),
       });
       if (out.error) return res.status(out.status).json({ error: out.error });
       res.json(out.file);
@@ -318,6 +334,11 @@ app.post("/api/leads/:id/role-alerts/seen", ensureAuthenticated, async (req, res
   }
 });
 
+// --- Change history for one company (audit_log) --------------------------------
+app.get("/api/leads/:id/history", ensureAuthenticated, async (req, res) => {
+  try { res.json({ items: await leadHistory(pool, req.params.id) }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to load the history." }); }
+});
+
 // --- Job descriptions (Nimbl letterhead PDFs) -----------------------------------
 app.get("/api/job-descriptions", ensureAuthenticated, async (req, res) => {
   try { res.json({ items: await listJds(pool) }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to load job descriptions." }); }
@@ -326,18 +347,18 @@ app.post("/api/leads/:id/job-descriptions", ensureAuthenticated, async (req, res
   try {
     const lead = await pool.query("select id from leads where id = $1", [String(req.params.id)]);
     if (!lead.rows.length) return res.status(404).json({ error: "Lead not found." });
-    res.json(await createJd(pool, req.params.id, req.body || {}, { email: (req.user && req.user.email) || "" }));
+    res.json(await createJd(actorPool(pool, emailOf(req)), req.params.id, req.body || {}, { email: emailOf(req) }));
   } catch (err) { console.error(err); res.status(500).json({ error: "Failed to save the job description." }); }
 });
 app.put("/api/job-descriptions/:id", ensureAuthenticated, async (req, res) => {
   try {
-    const jd = await updateJd(pool, req.params.id, req.body || {});
+    const jd = await updateJd(actorPool(pool, emailOf(req)), req.params.id, req.body || {});
     if (!jd) return res.status(404).json({ error: "Job description not found." });
     res.json(jd);
   } catch (err) { console.error(err); res.status(500).json({ error: "Failed to save the job description." }); }
 });
 app.delete("/api/job-descriptions/:id", ensureAuthenticated, async (req, res) => {
-  try { await deleteJd(pool, req.params.id); res.json({ ok: true }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to delete the job description." }); }
+  try { await deleteJd(actorPool(pool, emailOf(req)), req.params.id); res.json({ ok: true }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to delete the job description." }); }
 });
 app.get("/api/job-descriptions/:id/pdf", ensureAuthenticated, async (req, res) => {
   try {

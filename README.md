@@ -97,6 +97,15 @@ session is created.
 
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — from step 5 above
 - `GOOGLE_ALLOWED_DOMAIN` — defaults to `nimbl.ai`
+- `OWNER_EMAILS` — comma-separated; defaults to `john@nimbl.ai,jmvillarde@gmail.com`. Only owners
+  can connect or disconnect the Google Drive backup, see and revoke everyone's extension keys, and
+  change the tracked role types. Everyone else sees and revokes only their own keys.
+
+**Who did what.** Every change records who made it: touches, notes and contacts carry an author
+("by Kai"), and each client card has a History list (`audit_log`) of status, priority, stage,
+contact, note, job description and role changes with the person's name. Changes made straight in
+the database (Claude, the morning scan) show as "Claude". See `server/actor.js` and
+`server/audit_schema.sql`.
 - `PUBLIC_URL` — this app's public https URL, no trailing slash (must match
   the redirect URI exactly)
 - `SESSION_SECRET` — a random string signing session cookies; generate one

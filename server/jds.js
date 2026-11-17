@@ -20,7 +20,7 @@ function toJson(r) {
   return {
     id: r.id, leadId: r.lead_id, status: r.status, sourceUrl: r.source_url, sourceText: r.source_text,
     content: cleanContent(r.content), showClient: r.show_client, clientLabel: r.client_label,
-    contactEmail: r.contact_email, contactPhone: r.contact_phone,
+    contactEmail: r.contact_email, contactPhone: r.contact_phone, createdBy: r.created_by || "",
     createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(),
   };
 }
