@@ -1,10 +1,9 @@
 /* Shared look for the extension's own pages (settings, popup, Add to Radar). Matches Radar. */
+/* Always the light Radar look, even in dark mode. */
 :root {
+  color-scheme: light;
   --ink: #0d0129; --ink-soft: #5b5470; --paper: #fffcf7; --surface: #ffffff; --surface-2: #fbf1d9;
   --yellow: #fae59b; --teal: #19615c; --good: #3f7d52; --warn: #8a6416; --critical: #a13f3f;
-}
-@media (prefers-color-scheme: dark) {
-  :root { --ink: #f3eefc; --ink-soft: #b7b0c8; --paper: #17121f; --surface: #1f1929; --surface-2: #2a2234; --yellow: #f2d76a; --good: #7cc792; --warn: #e2b85a; --critical: #ef8f8f; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--paper); color: var(--ink); font: 500 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
