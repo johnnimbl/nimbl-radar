@@ -167,14 +167,25 @@ class Writer {
     this.y += 10;
     this.rect(BOX.x, this.y, BOX.w, 1, C.rule);
     this.y += 15;
-    let x = BOX.x;
-    const colW = cols.map((c) => Math.max(this.textWidth(c.label, this.f.bold, 14), this.textWidth(clean(c.value), this.f.regular, 14)));
-    const total = colW.reduce((a, b) => a + b, 0) + 32 * (cols.length - 1);
-    const gap = total > BOX.w ? Math.max(14, (BOX.w - colW.reduce((a, b) => a + b, 0)) / Math.max(1, cols.length - 1)) : 32;
+    // Columns sit 32px apart, as in the design; when they don't fit the 640px box they wrap
+    // onto another row instead of running past the margin.
+    const colW = cols.map((c) => Math.min(BOX.w, Math.max(this.textWidth(c.label, this.f.bold, 14), this.textWidth(clean(c.value), this.f.regular, 14))));
+    const rows = [[]];
+    let used = 0;
     cols.forEach((c, i) => {
-      this.text(c.label, x, this.y, 14, this.f.bold, C.ink);
-      this.text(clean(c.value), x, this.y + 21, 14, this.f.regular, C.soft);
-      x += colW[i] + gap;
+      const need = (rows[rows.length - 1].length ? 32 : 0) + colW[i];
+      if (rows[rows.length - 1].length && used + need > BOX.w) { rows.push([]); used = 0; }
+      used += (rows[rows.length - 1].length ? 32 : 0) + colW[i];
+      rows[rows.length - 1].push(i);
+    });
+    rows.forEach((row, ri) => {
+      if (ri) this.y += 50;
+      let x = BOX.x;
+      row.forEach((i) => {
+        this.text(cols[i].label, x, this.y, 14, this.f.bold, C.ink);
+        this.text(clean(cols[i].value), x, this.y + 21, 14, this.f.regular, C.soft);
+        x += colW[i] + 32;
+      });
     });
     this.y += 42;
   }
