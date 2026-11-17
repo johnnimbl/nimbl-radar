@@ -44,6 +44,11 @@
   var clientQuery = "";               // CRM list search box
   var inClientCard = false;           // true while the full-page client card is being built (contact cards drop their own timeline)
   var files = [];                     // metadata of uploaded files (the bytes stay on the server)
+  var jds = [];                       // job descriptions (Nimbl letterhead PDFs)
+  var jdOpen = {};                    // job description id -> editor open
+  var jdEdits = {};                   // job description id -> unsaved field values
+  var jdNew = {};                     // lead id -> "new job description" form open
+  var jdBusy = 0;                     // saves in flight; a background reload must not overwrite them
   var uploading = {};                 // "leadId|contactId" -> number of uploads in flight
   var filesPending = 0;               // uploads/deletes in flight; a refresh must not overwrite them
   var FILE_EXTS = ["pdf", "png", "jpg", "jpeg", "webp", "gif", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv", "rtf"];
@@ -919,6 +924,179 @@
     }).catch(function () { /* files are optional; everything else keeps working without them */ });
   }
 
+  /* ---------------- Job descriptions (letterhead PDFs) ---------------- */
+
+  var JD_FIELDS = [
+    { k: "title", label: "Role title" },
+    { k: "practice", label: "Practice area", half: true },
+    { k: "location", label: "Location", half: true },
+    { k: "type", label: "Type", half: true },
+    { k: "level", label: "Level", half: true },
+    { k: "about", label: "About the role", area: 5 },
+    { k: "responsibilities", label: "What you will do (one per line)", area: 6, list: true },
+    { k: "requirements", label: "What we are looking for (one per line)", area: 6, list: true },
+    { k: "niceToHave", label: "Nice to have (one per line)", area: 5, list: true },
+    { k: "language", label: "Language", area: 2 },
+    { k: "apply", label: "How to apply", area: 3 }
+  ];
+
+  function leadJds(leadId) { return jds.filter(function (j) { return j.leadId === leadId; }); }
+  function lastPhone() { try { return window.localStorage.getItem("radar-jd-phone") || ""; } catch (e) { return ""; } }
+
+  function jdApi(method, url, body) {
+    jdBusy++;
+    return fetch(url, { method: method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined })
+      .then(function (res) {
+        if (res.status === 401) { window.location.href = "/auth/login"; return null; }
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .finally(function () { jdBusy--; });
+  }
+
+  function loadJds() {
+    return fetch("/api/job-descriptions").then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return null; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    }).then(function (data) {
+      if (!data || jdBusy > 0) return;
+      if (JSON.stringify(data.items) !== JSON.stringify(jds)) {
+        jds = data.items;
+        var a = document.activeElement;
+        var typing = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+        if (!typing && !activityForm && !dictation.on && view !== "playbook") render();
+      }
+    }).catch(function () { /* optional feature */ });
+  }
+
+  function jdVal(j, k) {
+    var e = jdEdits[j.id];
+    if (e && k in e) return e[k];
+    if (k === "showClient" || k === "clientLabel" || k === "contactEmail" || k === "contactPhone" || k === "sourceUrl" || k === "sourceText") return j[k];
+    var v = (j.content || {})[k];
+    return Array.isArray(v) ? v.join("\n") : (v || "");
+  }
+
+  function jdTitle(j) {
+    var t = (j.content && j.content.title) || "";
+    if (t) return t;
+    if (j.sourceUrl) { try { return "Posting from " + new URL(j.sourceUrl).hostname.replace(/^www\./, ""); } catch (e) { /* not a URL */ } }
+    return "Pasted posting";
+  }
+
+  function renderJdEditor(l, j) {
+    var d = readOnly ? " disabled" : "";
+    function field(f) {
+      var v = jdVal(j, f.k);
+      var input = f.area
+        ? '<textarea rows="' + f.area + '" data-action="jd-field" data-jid="' + j.id + '" data-key="' + f.k + '"' + d + '>' + escapeHtml(v) + '</textarea>'
+        : '<input type="text" value="' + escapeHtml(v) + '" data-action="jd-field" data-jid="' + j.id + '" data-key="' + f.k + '"' + d + '>';
+      return '<label class="jd-f' + (f.half ? ' jd-half' : '') + '"><span>' + f.label + '</span>' + input + '</label>';
+    }
+    var show = jdVal(j, "showClient") === true;
+    return '<div class="jd-editor">' +
+      (j.status === "waiting" ? '<p class="help">Waiting for Claude. In chat, ask: <em>“Do the job description for ' + escapeHtml(l.company) + '.”</em> You can also fill it in yourself below.</p>' : '') +
+      '<div class="jd-grid">' + JD_FIELDS.map(field).join("") + '</div>' +
+      '<div class="jd-grid">' +
+        '<label class="jd-f jd-check"><input type="checkbox" data-action="jd-field" data-jid="' + j.id + '" data-key="showClient"' + (show ? " checked" : "") + d + '><span>Show the client name (' + escapeHtml(l.company) + ') on the PDF</span></label>' +
+        (show ? '' : '<label class="jd-f"><span>Describe the client instead (optional)</span><input type="text" placeholder="e.g. US Salesforce consultancy" value="' + escapeHtml(jdVal(j, "clientLabel")) + '" data-action="jd-field" data-jid="' + j.id + '" data-key="clientLabel"' + d + '></label>') +
+        '<label class="jd-f jd-half"><span>Your email (footer)</span><input type="email" value="' + escapeHtml(jdVal(j, "contactEmail")) + '" data-action="jd-field" data-jid="' + j.id + '" data-key="contactEmail"' + d + '></label>' +
+        '<label class="jd-f jd-half"><span>Your phone (footer)</span><input type="text" value="' + escapeHtml(jdVal(j, "contactPhone")) + '" data-action="jd-field" data-jid="' + j.id + '" data-key="contactPhone"' + d + '></label>' +
+      '</div>' +
+      '<details class="jd-src"><summary>Original posting</summary>' +
+        '<label class="jd-f"><span>Link</span><input type="url" value="' + escapeHtml(jdVal(j, "sourceUrl")) + '" data-action="jd-field" data-jid="' + j.id + '" data-key="sourceUrl"' + d + '></label>' +
+        '<label class="jd-f"><span>Pasted text</span><textarea rows="6" data-action="jd-field" data-jid="' + j.id + '" data-key="sourceText"' + d + '>' + escapeHtml(jdVal(j, "sourceText")) + '</textarea></label>' +
+      '</details>' +
+      (readOnly ? '' : '<div class="jd-actions"><button type="button" class="btn btn-sm btn-primary" data-action="jd-save" data-jid="' + j.id + '">Save</button>' +
+        (j.status === "waiting" ? '<button type="button" class="btn btn-sm" data-action="jd-save" data-jid="' + j.id + '" data-value="ready">Save as ready</button>' : '') +
+        '<button type="button" class="btn-link" data-action="jd-close" data-jid="' + j.id + '">Close</button></div>') +
+    '</div>';
+  }
+
+  function renderJdPanel(l) {
+    var list = leadJds(l.id);
+    var rows = list.map(function (j) {
+      var ready = j.status === "ready";
+      var pdf = "/api/job-descriptions/" + encodeURIComponent(j.id) + "/pdf";
+      var dirty = jdEdits[j.id] && Object.keys(jdEdits[j.id]).length;
+      return '<div class="jd-item">' +
+        '<div class="jd-row">' +
+          '<span class="jd-title">' + escapeHtml(jdTitle(j)) + '</span>' +
+          '<span class="jd-chip ' + (ready ? 'jd-ready' : 'jd-wait') + '">' + (ready ? 'Ready' : 'Waiting for Claude') + '</span>' +
+          (dirty ? '<span class="jd-chip jd-wait">Unsaved</span>' : '') +
+        '</div>' +
+        '<div class="jd-row jd-btns">' +
+          (ready ? '<a class="btn btn-sm btn-primary" href="' + pdf + '?download=1" data-action="jd-download">Download PDF</a><a class="btn-link" href="' + pdf + '" target="_blank" rel="noopener">Preview ↗</a>' : '') +
+          '<button type="button" class="btn-link" data-action="jd-toggle" data-jid="' + j.id + '">' + (jdOpen[j.id] ? 'Hide' : (readOnly ? 'View' : 'Edit')) + '</button>' +
+          (readOnly ? '' : '<button type="button" class="btn-link jd-del" data-action="jd-delete" data-jid="' + j.id + '">Delete</button>') +
+        '</div>' +
+        (jdOpen[j.id] ? renderJdEditor(l, j) : '') +
+      '</div>';
+    }).join("");
+    var form = '';
+    if (!readOnly) {
+      form = jdNew[l.id]
+        ? '<div class="jd-new">' +
+            '<label class="jd-f"><span>Job posting link</span><input type="url" id="jd-new-url-' + l.id + '" value="' + escapeHtml(l.jobUrl || "") + '" placeholder="https://…"></label>' +
+            '<label class="jd-f"><span>Or paste the full job description</span><textarea rows="7" id="jd-new-text-' + l.id + '" placeholder="Paste the posting here. Pasted text works best: some job sites can\'t be read from a link."></textarea></label>' +
+            '<div class="jd-actions"><button type="button" class="btn btn-sm btn-primary" data-action="jd-create" data-id="' + l.id + '">Save for Claude</button>' +
+            '<button type="button" class="btn-link" data-action="jd-new-cancel" data-id="' + l.id + '">Cancel</button></div>' +
+            '<p class="help">Then ask Claude in chat to do the job description for ' + escapeHtml(l.company) + '. It comes back here ready to download on the Nimbl letterhead.</p>' +
+          '</div>'
+        : '<button type="button" class="btn btn-sm" data-action="jd-new" data-id="' + l.id + '">+ Job description</button>';
+    }
+    return '<div class="jd-panel">' + (rows || (readOnly ? '<p class="help">No job descriptions yet.</p>' : '')) + form + '</div>';
+  }
+
+  function createJd(leadId) {
+    var url = (document.getElementById("jd-new-url-" + leadId) || {}).value || "";
+    var text = (document.getElementById("jd-new-text-" + leadId) || {}).value || "";
+    if (!url.trim() && !text.trim()) { toast("Add a link or paste the job description first."); return; }
+    jdApi("POST", "/api/leads/" + encodeURIComponent(leadId) + "/job-descriptions", { sourceUrl: url.trim(), sourceText: text, contactPhone: lastPhone() })
+      .then(function (j) {
+        if (!j) return;
+        jds.push(j); jdNew[leadId] = false;
+        render();
+        toast("Saved. Ask Claude in chat to write it up.");
+      })
+      .catch(function (err) { toast("Couldn't save the job description: " + err.message); });
+  }
+
+  function saveJd(jid, status) {
+    var j = jds.filter(function (x) { return x.id === jid; })[0];
+    if (!j) return;
+    var e = jdEdits[jid] || {};
+    var body = {};
+    var content = Object.assign({}, j.content || {});
+    var contentTouched = false;
+    Object.keys(e).forEach(function (k) {
+      if (["showClient", "clientLabel", "contactEmail", "contactPhone", "sourceUrl", "sourceText"].indexOf(k) !== -1) { body[k] = e[k]; }
+      else { content[k] = e[k]; contentTouched = true; }
+    });
+    if (contentTouched) body.content = content;
+    if (status) body.status = status;
+    if ("contactPhone" in e) { try { window.localStorage.setItem("radar-jd-phone", e.contactPhone); } catch (err) { /* ignore */ } }
+    jdApi("PUT", "/api/job-descriptions/" + encodeURIComponent(jid), body).then(function (saved) {
+      if (!saved) return;
+      jds = jds.map(function (x) { return x.id === jid ? Object.assign({}, x, saved) : x; });
+      delete jdEdits[jid];
+      render();
+      toast(status === "ready" ? "Saved. The PDF is ready to download." : "Saved.");
+    }).catch(function (err) { toast("Couldn't save: " + err.message); });
+  }
+
+  function deleteJdItem(jid) {
+    var j = jds.filter(function (x) { return x.id === jid; })[0];
+    if (!j || !window.confirm("Delete the job description “" + jdTitle(j) + "”?")) return;
+    jds = jds.filter(function (x) { return x.id !== jid; });
+    delete jdEdits[jid]; delete jdOpen[jid];
+    render();
+    jdApi("DELETE", "/api/job-descriptions/" + encodeURIComponent(jid)).catch(function (err) {
+      jds.push(j); render(); toast("Couldn't delete: " + err.message);
+    });
+  }
+
   function renderContactsPanel(l) {
     var body = l.contacts.length ? l.contacts.map(function (c) { return renderContactCard(l, c); }).join("") : '<p style="color:var(--ink-soft);margin:4px 0">No contacts yet.</p>';
     var fcN = firstContact(l);
@@ -1082,6 +1260,7 @@
             mailto +
           '</div>' +
           '<p class="help">To reach out, ask Claude in chat — e.g. "Draft outreach to ' + escapeHtml(l.company) + '." Claude will use these notes to write the email and create a Gmail draft for you to review before anything is sent.</p>' +
+          '<h4>Job descriptions</h4>' + renderJdPanel(l) +
           (isWon ? renderDocumentsPanel(l) : "") +
         '</div>' +
         '<div>' +
@@ -2099,6 +2278,7 @@
             renderTimeline(l) +
           '</div>' +
           '<aside class="cc-side">' + company +
+            '<section class="cc-sec"><h3>Job descriptions</h3>' + renderJdPanel(l) + '</section>' +
             '<section class="cc-sec"><h3>Client info</h3>' + renderClientInfoPanel(l).replace('<h4>Client info</h4>', '') + '</section>' +
             '<section class="cc-sec"><h3>Documents</h3>' + renderDocumentsPanel(l).replace('<h4>Documents</h4>', '') + '</section>' +
           '</aside>' +
@@ -2735,6 +2915,7 @@
     var beforeNew = newRolesCount();
     if (!silent || !dictation.on) loadPlaybook();
     loadFiles();
+    loadJds();
     fetch("/api/state").then(function (res) {
       if (res.status === 401) { window.location.href = "/auth/login"; return null; }
       if (!res.ok) throw new Error("HTTP " + res.status);
@@ -2905,6 +3086,14 @@
     if (action === "crm-open") { openClient(id); return; }
     if (action === "crm-back") { closeClient(); return; }
     if (action === "contact-checked") { markContactChecked(id, cid); return; }
+    if (action === "jd-new") { jdNew[id] = true; render(); var nu = document.getElementById("jd-new-text-" + id); if (nu) nu.focus(); return; }
+    if (action === "jd-new-cancel") { jdNew[id] = false; render(); return; }
+    if (action === "jd-create") { createJd(id); return; }
+    if (action === "jd-toggle") { var tj = t.getAttribute("data-jid"); jdOpen[tj] = !jdOpen[tj]; render(); return; }
+    if (action === "jd-close") { jdOpen[t.getAttribute("data-jid")] = false; render(); return; }
+    if (action === "jd-save") { saveJd(t.getAttribute("data-jid"), t.getAttribute("data-value") || ""); return; }
+    if (action === "jd-delete") { deleteJdItem(t.getAttribute("data-jid")); return; }
+    if (action === "jd-download") { return; }
     if (action === "crm-filter") { crmFilter = t.getAttribute("data-value"); render(); return; }
     if (action === "crm-layout") { crmLayout = t.getAttribute("data-value") === "list" ? "list" : "cards"; saveCrmView(); render(); return; }
     if (action === "crm-sort-col") {
@@ -2988,6 +3177,13 @@
     var id = t.getAttribute("data-id");
     var cid = t.getAttribute("data-cid");
     if (action === "file-input") { uploadFiles(id, cid, t.files); return; }
+    if (action === "jd-field" && t.type === "checkbox") {
+      var cj = t.getAttribute("data-jid");
+      if (!jdEdits[cj]) jdEdits[cj] = {};
+      jdEdits[cj][t.getAttribute("data-key")] = t.checked;
+      render();
+      return;
+    }
     if (action === "set-status") { setStatus(id, t.value); return; }
     if (action === "set-priority") { setPriority(id, t.value); return; }
     if (action === "crm-sort") { crmSort = t.value; crmSortDesc = false; saveCrmView(); render(); return; }
@@ -3043,6 +3239,12 @@
   });
 
   document.getElementById("app").addEventListener("input", function (e) {
+    if (e.target.getAttribute("data-action") === "jd-field" && e.target.type !== "checkbox") {
+      var ej = e.target.getAttribute("data-jid");
+      if (!jdEdits[ej]) jdEdits[ej] = {};
+      jdEdits[ej][e.target.getAttribute("data-key")] = e.target.value;
+      return;
+    }
     if (e.target.getAttribute("data-action") === "crm-search") {
       crmQuery = e.target.value;
       render();
@@ -3143,6 +3345,7 @@
       render();
       loadPlaybook();
       loadFiles();
+      loadJds();
     }).catch(function (err) {
       document.getElementById("app").innerHTML =
         '<div class="empty">Couldn\'t load data from the server: ' + escapeHtml(err.message) + '. Is the API running and DATABASE_URL configured?</div>';

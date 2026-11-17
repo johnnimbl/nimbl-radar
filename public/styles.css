@@ -578,3 +578,24 @@ th.cl-col-last{white-space:nowrap;}
 .af-tag{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--warn);border:1px solid currentColor;border-radius:999px;padding:2px 8px;white-space:nowrap;}
 .af-text{flex:1;min-width:180px;color:var(--ink-soft);}
 .ct-hint{display:block;margin-top:3px;font-size:.7rem;font-weight:600;color:var(--warn);}
+
+/* Job descriptions (letterhead PDFs) */
+.jd-panel{display:flex;flex-direction:column;gap:10px;}
+.jd-item{border:1px solid var(--ink);border-radius:10px;padding:10px 12px;background:var(--surface);display:flex;flex-direction:column;gap:8px;}
+.jd-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;}
+.jd-title{font-weight:700;font-size:.88rem;flex:1;min-width:140px;overflow-wrap:anywhere;}
+.jd-chip{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;border:1px solid currentColor;border-radius:999px;padding:2px 8px;white-space:nowrap;}
+.jd-ready{color:var(--good);}
+.jd-wait{color:var(--warn);}
+.jd-btns .btn{text-decoration:none;}
+.jd-del{color:var(--critical);}
+.jd-editor, .jd-new{display:flex;flex-direction:column;gap:10px;border-top:1px solid rgba(13,1,41,.14);padding-top:10px;}
+.jd-new{border:1px dashed var(--ink);border-radius:10px;padding:10px 12px;background:var(--paper);}
+.jd-grid{display:flex;flex-wrap:wrap;gap:10px;}
+.jd-f{display:flex;flex-direction:column;gap:4px;flex:1 1 100%;font-size:.74rem;font-weight:600;color:var(--ink-soft);}
+.jd-f.jd-half{flex:1 1 calc(50% - 5px);min-width:140px;}
+.jd-f input[type=text], .jd-f input[type=url], .jd-f input[type=email], .jd-f textarea{width:100%;box-sizing:border-box;font:inherit;font-weight:400;font-size:.84rem;color:var(--ink);border:1px solid var(--ink);border-radius:8px;padding:7px 9px;background:var(--surface);}
+.jd-f textarea{resize:vertical;line-height:1.45;}
+.jd-check{flex-direction:row;align-items:center;gap:8px;font-weight:600;color:var(--ink);}
+.jd-src summary{cursor:pointer;font-size:.78rem;font-weight:600;color:var(--ink-soft);margin-bottom:6px;}
+.jd-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}

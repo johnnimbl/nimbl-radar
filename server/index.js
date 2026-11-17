@@ -7,6 +7,8 @@ const { buildSession } = require("./session");
 const { getState, putState } = require("./state");
 const { listPlaybook, upsertPlaybookItem, deletePlaybookItem } = require("./playbook");
 const { listFiles, saveFile, getFile, deleteFile, MAX_FILE_BYTES } = require("./files");
+const { listJds, getJd, createJd, updateJd, deleteJd } = require("./jds");
+const { renderJobDescriptionPdf } = require("./jdpdf");
 const { configurePassport, ensureAuthenticated, googleLoginEnabled, ALLOWED_DOMAIN } = require("./auth");
 
 const app = express();
@@ -197,6 +199,43 @@ app.post("/api/leads/:id/role-alerts/seen", ensureAuthenticated, async (req, res
     console.error(err);
     res.status(500).json({ error: "Failed to update the alerts." });
   }
+});
+
+// --- Job descriptions (Nimbl letterhead PDFs) -----------------------------------
+app.get("/api/job-descriptions", ensureAuthenticated, async (req, res) => {
+  try { res.json({ items: await listJds(pool) }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to load job descriptions." }); }
+});
+app.post("/api/leads/:id/job-descriptions", ensureAuthenticated, async (req, res) => {
+  try {
+    const lead = await pool.query("select id from leads where id = $1", [String(req.params.id)]);
+    if (!lead.rows.length) return res.status(404).json({ error: "Lead not found." });
+    res.json(await createJd(pool, req.params.id, req.body || {}, { email: (req.user && req.user.email) || "" }));
+  } catch (err) { console.error(err); res.status(500).json({ error: "Failed to save the job description." }); }
+});
+app.put("/api/job-descriptions/:id", ensureAuthenticated, async (req, res) => {
+  try {
+    const jd = await updateJd(pool, req.params.id, req.body || {});
+    if (!jd) return res.status(404).json({ error: "Job description not found." });
+    res.json(jd);
+  } catch (err) { console.error(err); res.status(500).json({ error: "Failed to save the job description." }); }
+});
+app.delete("/api/job-descriptions/:id", ensureAuthenticated, async (req, res) => {
+  try { await deleteJd(pool, req.params.id); res.json({ ok: true }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to delete the job description." }); }
+});
+app.get("/api/job-descriptions/:id/pdf", ensureAuthenticated, async (req, res) => {
+  try {
+    const jd = await getJd(pool, req.params.id);
+    if (!jd) return res.status(404).send("Job description not found.");
+    const pdf = await renderJobDescriptionPdf(jd);
+    const name = "Nimbl.ai - " + ((jd.content && jd.content.title) || "Job description").replace(/[\\/:*?"<>|]+/g, " ").trim() + ".pdf";
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Length": String(pdf.length),
+      "Content-Disposition": (req.query.download ? "attachment" : "inline") + "; filename*=UTF-8''" + encodeURIComponent(name),
+      "Cache-Control": "private, no-store",
+    });
+    res.end(pdf);
+  } catch (err) { console.error(err); res.status(500).send("Failed to build the PDF."); }
 });
 
 // --- Agent drafts (written by the morning scan; never sent by the app) ---------

@@ -250,3 +250,24 @@ create table if not exists agent_drafts (
 );
 create index if not exists agent_drafts_lead_id_idx on agent_drafts(lead_id);
 alter table agent_drafts enable row level security;
+
+-- Job descriptions on the Nimbl letterhead. John saves a posting (link and/or pasted text) as
+-- 'waiting'; Claude writes the Nimbl version into content (title, practice, location, type, level,
+-- about, responsibilities[], requirements[], niceToHave[], language, apply) and sets 'ready';
+-- the app renders it as a PDF (server/jdpdf.js). The client name is hidden unless show_client.
+create table if not exists job_descriptions (
+  id text primary key default gen_random_uuid()::text,
+  lead_id text not null references leads(id) on delete cascade,
+  status text not null default 'waiting' check (status in ('waiting','ready')),
+  source_url text not null default '',
+  source_text text not null default '',
+  content jsonb not null default '{}'::jsonb,
+  show_client boolean not null default false,
+  client_label text not null default '',
+  contact_email text not null default '',
+  contact_phone text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists job_descriptions_lead_idx on job_descriptions(lead_id, created_at);
+alter table job_descriptions enable row level security;
