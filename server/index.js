@@ -114,6 +114,15 @@ extApi.post("/job-descriptions", wrap(async (req) => {
   if (!lead.rows.length) throw Object.assign(new Error("Pick a company in Radar first."), { status: 400 });
   return createJd(pool, b.leadId, { sourceUrl: b.sourceUrl, sourceText: b.sourceText }, { email: req.extUser || "" });
 }));
+extApi.get("/job-descriptions/:id/pdf", async (req, res) => {
+  try {
+    const jd = await getJd(pool, req.params.id);
+    if (!jd) return res.status(404).json({ error: "Job description not found." });
+    const pdf = await renderJobDescriptionPdf(jd);
+    res.set({ "Content-Type": "application/pdf", "Content-Length": String(pdf.length), "Cache-Control": "private, no-store" });
+    res.end(pdf);
+  } catch (err) { console.error(err); res.status(500).json({ error: "Failed to build the PDF." }); }
+});
 app.use("/api/ext", extApi);
 
 // --- Backups (Google Drive + download) ----------------------------------------

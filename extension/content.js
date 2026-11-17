@@ -31,7 +31,7 @@
     lastInserted: null,    // {contactId, text, touch}
     replyOpen: false, replyText: "", flash: null, busy: false,
   };
-  chrome.storage.local.get({ panelOpen: true }).then((v) => { S.open = v.panelOpen; render(); });
+  chrome.storage.local.get({ panelOpen: true, panelWide: false }).then((v) => { S.open = v.panelOpen; S.wide = v.panelWide; render(); });
 
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const api = (method, path, body) => chrome.runtime.sendMessage({ type: "api", method, path, body });
@@ -236,8 +236,9 @@
     else body = renderAdd(S.person);
     if (S.flash) body = '<div class="msg ' + (S.flash.ok ? "ok" : "err") + '" role="status">' + esc(S.flash.text) + "</div>" + body;
     wrap.innerHTML =
-      '<section class="panel" aria-label="Nimbl Radar">' +
+      '<section class="panel' + (S.wide ? " wide" : "") + '" aria-label="Nimbl Radar">' +
         '<div class="head"><img src="' + chrome.runtime.getURL("icons/icon32.png") + '" alt=""><strong>Nimbl Radar</strong>' +
+          '<button type="button" class="icon-btn" data-act="wide" title="' + (S.wide ? "Show less" : "Show the full client card") + '" aria-label="' + (S.wide ? "Show less" : "Show the full client card") + '" aria-pressed="' + !!S.wide + '">' + (S.wide ? "⇥" : "⇤") + "</button>" +
           '<button type="button" class="icon-btn" data-act="retry" title="Refresh" aria-label="Refresh">↻</button>' +
           '<button type="button" class="icon-btn" data-act="close" title="Hide panel" aria-label="Hide panel">–</button></div>' +
         '<div class="body">' + body + "</div>" +
@@ -281,9 +282,75 @@
     }
     h += '<p class="note">Logging a touch updates the stage and next follow-up in Radar. You always press Send on LinkedIn yourself.</p></div>';
     const acts = c.activities || [];
-    if (acts.length) {
-      h += '<div class="sec"><h3>Recent</h3><ul class="acts">' + acts.slice(0, 3).map((a) =>
-        "<li><div class=\"meta\">" + esc(a.date) + " · " + esc(a.type) + (a.direction === "Inbound" ? " · from them" : "") + "</div>" + esc((a.summary || "").slice(0, 160)) + (a.summary && a.summary.length > 160 ? "…" : "") + "</li>").join("") + "</ul></div>";
+    const timeline = acts.length
+      ? '<div class="sec"><h3>' + (S.wide ? "Timeline with " + esc(c.name.split(" ")[0]) : "Recent") + '</h3><ul class="acts">' + acts.slice(0, S.wide ? 25 : 3).map((a) => {
+          const full = S.wide ? (a.summary || "") : (a.summary || "").slice(0, 160) + (a.summary && a.summary.length > 160 ? "…" : "");
+          return '<li><div class="meta">' + esc(a.date) + " · " + esc(a.type) + (a.direction === "Inbound" ? " · from them" : "") + '</div><div class="act-text">' + esc(full) + "</div></li>";
+        }).join("") + "</ul></div>"
+      : "";
+    if (!S.wide) {
+      h += renderRole(c) + timeline;
+      if (c.card) h += '<div class="row"><button type="button" class="btn" data-act="wide">Show the full client card ⇤</button></div>';
+      return h;
+    }
+    return '<div class="cols"><div class="col">' + h + timeline + '</div><div class="col">' + renderRole(c) + renderCard(c) + "</div></div>";
+  }
+
+  // The open role (and any newer ones) with its job descriptions: open the posting, preview or
+  // download the Nimbl PDF, or save the posting for Claude to write up.
+  function renderRole(c) {
+    const lead = c.lead || {};
+    const card = c.card || {};
+    const jds = card.jobDescriptions || [];
+    const roles = (card.roles || []).filter((r) => r.url && r.url !== card.jobUrl);
+    if (!lead.jobTitle && !jds.length && !roles.length) return "";
+    let h = '<div class="sec"><h3>Open role</h3><div class="card">';
+    if (lead.jobTitle) {
+      h += '<div><strong>' + esc(lead.jobTitle) + "</strong>" + (card.employmentType ? '<div class="sub">' + esc(card.employmentType) + (card.datePosted ? " · posted " + esc(card.datePosted) : "") + "</div>" : "") + "</div>";
+      if (card.jobUrl) h += '<div class="row"><a href="' + esc(card.jobUrl) + '" target="_blank" rel="noopener">Open the job posting ↗</a></div>';
+    }
+    jds.forEach((j) => {
+      h += '<div class="jd-line"><span>' + esc(j.title) + "</span>" + (j.status === "ready"
+        ? '<span class="row"><button type="button" class="btn btn-primary" data-act="jd-download" data-id="' + esc(j.id) + '" data-title="' + esc(j.title) + '">Download PDF</button>' +
+          (S.radarUrl ? '<a href="' + esc(S.radarUrl + "/api/job-descriptions/" + encodeURIComponent(j.id) + "/pdf") + '" target="_blank" rel="noopener">Preview ↗</a>' : "") + "</span>"
+        : '<span class="chip warn">Waiting for Claude</span>') + "</div>";
+    });
+    if (!jds.length && card.jobUrl) {
+      h += '<div class="row"><button type="button" class="btn" data-act="jd-new">Make a Nimbl job description</button></div>' +
+        '<p class="note">Saves this posting in Radar; then ask Claude in chat to write it up on the letterhead.</p>';
+    }
+    if (roles.length) {
+      h += '<div class="sub">Also posted:</div><ul class="plain">' + roles.map((r) => '<li><a href="' + esc(r.url) + '" target="_blank" rel="noopener">' + esc(r.title || "Job posting") + " ↗</a>" + (r.date ? ' <span class="muted">' + esc(r.date) + "</span>" : "") + "</li>").join("") + "</ul>";
+    }
+    return h + "</div></div>";
+  }
+
+  // The bigger view: the company around this person, like Radar's client card.
+  function renderCard(c) {
+    const lead = c.lead || {};
+    const card = c.card;
+    if (!card) return "";
+    const pri = lead.priority === "High" ? "good" : lead.priority === "Low" ? "" : "warn";
+    let h = '<div class="sec"><h3>Company</h3><div class="card">' +
+      '<div class="row"><strong>' + esc(lead.company) + '</strong><span class="chip teal">' + esc(lead.status || "") + "</span>" + (lead.priority ? '<span class="chip ' + pri + '">' + esc(lead.priority) + "</span>" : "") + "</div>" +
+      (card.linkedinSummary ? '<div class="sub">' + esc(card.linkedinSummary) + "</div>" : card.estSize ? '<div class="sub">' + esc(card.estSize) + "</div>" : "") +
+      '<div class="row">' + (card.website ? '<a href="' + esc(card.website) + '" target="_blank" rel="noopener">Website ↗</a>' : "") +
+        (card.linkedin ? '<a href="' + esc(card.linkedin) + '" target="_blank" rel="noopener">Company LinkedIn ↗</a>' : "") + "</div>" +
+      (card.nearshoreFit ? '<details><summary>Nearshore fit</summary><p class="note">' + esc(card.nearshoreFit) + "</p></details>" : "") +
+      (card.companyProfile ? '<details><summary>About the company</summary><p class="note">' + esc(card.companyProfile) + "</p></details>" : "") +
+      "</div></div>";
+    const people = card.people || [];
+    if (people.length) {
+      h += '<div class="sec"><h3>People at ' + esc(lead.company) + '</h3><ul class="people">' + people.map((p) => {
+        const me = p.id === c.id;
+        const nm = p.linkedin && !me ? '<a href="' + esc(p.linkedin) + '">' + esc(p.name) + "</a>" : "<strong>" + esc(p.name) + "</strong>";
+        return "<li>" + nm + (p.isPrimary ? ' <span class="chip good">First</span>' : "") + (me ? ' <span class="muted">(this profile)</span>' : "") +
+          '<div class="sub">' + esc(p.title || "") + (p.title ? " · " : "") + esc(p.stage) + (p.nextFollowUp ? " · " + esc(followLabel(p.nextFollowUp)) : "") + "</div></li>";
+      }).join("") + "</ul></div>";
+    }
+    const notes = card.notes || [];
+    if (notes.length) {
+      h += '<div class="sec"><h3>Notes</h3><ul class="acts">' + notes.map((n) => '<li><div class="meta">' + esc(n.date) + '</div><div class="act-text">' + esc(n.text) + "</div></li>").join("") + "</ul></div>";
     }
     return h;
   }
@@ -335,6 +402,24 @@
     if (act === "close") { S.open = false; chrome.storage.local.set({ panelOpen: false }); render(); return; }
     if (act === "open") { S.open = true; chrome.storage.local.set({ panelOpen: true }); render(); return; }
     if (act === "retry") { refresh(); return; }
+    if (act === "wide") { S.wide = !S.wide; chrome.storage.local.set({ panelWide: S.wide }); render(); return; }
+    if (act === "jd-download") {
+      b.disabled = true;
+      const r = await chrome.runtime.sendMessage({ type: "downloadJd", id, title: b.getAttribute("data-title") || "Job description" });
+      b.disabled = false;
+      flash(r && r.ok ? "Downloading the PDF." : (r && r.error) || "Couldn't download the PDF.", !!(r && r.ok));
+      return;
+    }
+    if (act === "jd-new") {
+      const lead = S.contact && S.contact.lead;
+      if (!lead) return;
+      const r = await api("POST", "/job-descriptions", { leadId: lead.id, sourceUrl: (S.contact.card && S.contact.card.jobUrl) || "" });
+      if (r && r.ok) {
+        S.contact.card.jobDescriptions = [{ id: r.data.id, title: lead.jobTitle || "Job description", status: "waiting" }];
+        flash("Saved in Radar. Ask Claude in chat to do the job description for " + lead.company + ".", true);
+      } else flash((r && r.error) || "Couldn't save.", false);
+      return;
+    }
     if (act === "options") { chrome.runtime.sendMessage({ type: "openOptions" }); return; }
     if (act === "insert" || act === "copy") {
       const d = (S.contact.drafts || []).find((x) => x.id === id);

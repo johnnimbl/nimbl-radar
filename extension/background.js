@@ -27,9 +27,26 @@ async function api(method, path, body) {
   return { ok: true, data, radarUrl: s.radarUrl };
 }
 
+// Fetch a job description PDF with the Radar key and save it through Chrome's downloads.
+async function downloadJd(id, title) {
+  const s = await settings();
+  if (!s.key) return { ok: false, error: "Add your Radar key in the extension settings." };
+  let res;
+  try { res = await fetch(s.radarUrl + "/api/ext/job-descriptions/" + encodeURIComponent(id) + "/pdf", { headers: { Authorization: "Bearer " + s.key } }); }
+  catch (e) { return { ok: false, error: "Can't reach Radar. Try again in a moment." }; }
+  if (!res.ok) return { ok: false, error: "Radar couldn't build the PDF (" + res.status + ")." };
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  const name = ("Nimbl.ai - " + String(title || "Job description")).replace(/[\\/:*?"<>|]+/g, " ").trim() + ".pdf";
+  await chrome.downloads.download({ url: "data:application/pdf;base64," + btoa(bin), filename: name, saveAs: false });
+  return { ok: true };
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg && msg.type === "api") { api(msg.method || "GET", msg.path, msg.body).then(reply); return true; }
   if (msg && msg.type === "settings") { settings().then((s) => reply({ radarUrl: s.radarUrl, hasKey: !!s.key })); return true; }
+  if (msg && msg.type === "downloadJd") { downloadJd(msg.id, msg.title).then(reply); return true; }
   if (msg && msg.type === "openOptions") { chrome.runtime.openOptionsPage(); reply({ ok: true }); return false; }
   if (msg && msg.type === "openTab") { chrome.tabs.create({ url: msg.url }); reply({ ok: true }); return false; }
   return false;

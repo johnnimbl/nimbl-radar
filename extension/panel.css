@@ -9,7 +9,7 @@
 }
 .rp * { box-sizing: border-box; }
 .panel {
-  position: fixed; right: 16px; top: 72px; width: 340px; max-width: calc(100vw - 32px); max-height: calc(100vh - 92px);
+  position: fixed; right: 16px; top: 72px; width: 380px; max-width: calc(100vw - 32px); max-height: calc(100vh - 92px);
   overflow: auto; background: var(--paper); border: 1px solid var(--ink); border-radius: 14px;
   box-shadow: 4px 4px 0 rgba(13, 1, 41, .85); z-index: 2147483000; display: flex; flex-direction: column;
 }
@@ -60,3 +60,16 @@ label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; font
 .msg { border: 1px solid currentColor; border-radius: 8px; padding: 7px 9px; font-size: 12px; }
 .msg.ok { color: var(--good); } .msg.err { color: var(--critical); }
 .muted { color: var(--ink-soft); }
+
+/* Wider "client card" view: two columns side by side */
+.panel.wide { width: 760px; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@media (max-width: 860px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.jd-line { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid rgba(13, 1, 41, .14); padding-top: 8px; }
+.plain { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.people { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.people li { border: 1px solid rgba(13, 1, 41, .2); border-radius: 8px; padding: 7px 9px; background: var(--surface); font-size: 12.5px; }
+details summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+details p { margin: 6px 0 0; }
+.act-text { white-space: pre-wrap; overflow-wrap: anywhere; }

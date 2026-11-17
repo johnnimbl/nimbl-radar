@@ -81,6 +81,20 @@ const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 const dstr = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : d || "");
 
+function leadCard(lead, people, notes, alerts, jds) {
+  const ci = lead.client_info || {};
+  return {
+    roleType: lead.role_type || "", jobUrl: lead.job_url || "", datePosted: dstr(lead.date_posted),
+    estSize: lead.est_size || "", website: lead.website || "", employmentType: lead.employment_type || "",
+    companyProfile: lead.company_profile || "", nearshoreFit: lead.nearshore_fit || "",
+    linkedin: ci.linkedin || "", linkedinSummary: ci.linkedinSummary || "",
+    people: (people || []).map((p) => ({ id: p.id, name: p.name, title: p.title, stage: p.stage, linkedin: p.linkedin, isPrimary: p.is_primary, nextFollowUp: dstr(p.next_follow_up) })),
+    notes: (notes || []).map((n) => ({ date: dstr(n.note_date), text: n.text })),
+    roles: (alerts || []).map((a) => ({ title: a.job_title, url: a.job_url, date: dstr(a.date_posted) || dstr(a.found_at), seen: !!a.seen_at })),
+    jobDescriptions: (jds || []).map((j) => ({ id: j.id, title: (j.content && j.content.title) || "Job description", status: j.status })),
+  };
+}
+
 function contactJson(c, lead, drafts, acts) {
   return {
     id: c.id, name: c.name, title: c.title, linkedin: c.linkedin, stage: c.stage, step: c.sequence_step || 0,
@@ -98,8 +112,19 @@ async function loadContact(pool, id) {
   const lead = (await pool.query("select * from leads where id = $1", [c.lead_id])).rows[0];
   const drafts = (await pool.query(
     "select * from agent_drafts where contact_id = $1 and kind <> 'contact' and used_at is null and dismissed_at is null order by touch, created_at", [id])).rows;
-  const acts = (await pool.query("select * from activities where contact_id = $1 order by activity_date desc, sort_order desc limit 5", [id])).rows;
-  return contactJson(c, lead, drafts, acts);
+  const acts = (await pool.query("select * from activities where contact_id = $1 order by activity_date desc, sort_order desc limit 25", [id])).rows;
+  const out = contactJson(c, lead, drafts, acts);
+  if (lead) {
+    // The bigger "client card" view in the extension shows the company around this person.
+    const [people, notes, alerts, jds] = await Promise.all([
+      pool.query("select id, name, title, stage, linkedin, is_primary, next_follow_up from contacts where lead_id = $1 order by sort_order, id", [lead.id]),
+      pool.query("select note_date, text from lead_notes where lead_id = $1 order by note_date desc nulls last, sort_order desc limit 6", [lead.id]),
+      pool.query("select job_title, job_url, date_posted, found_at, seen_at from role_alerts where lead_id = $1 order by found_at desc limit 6", [lead.id]),
+      pool.query("select id, content, status from job_descriptions where lead_id = $1 order by created_at desc", [lead.id]).catch(() => ({ rows: [] })),
+    ]);
+    out.card = leadCard(lead, people.rows, notes.rows, alerts.rows, jds.rows);
+  }
+  return out;
 }
 
 async function lookup(pool, q) {
