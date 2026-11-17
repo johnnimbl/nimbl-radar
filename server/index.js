@@ -18,6 +18,35 @@ const app = express();
 app.set("trust proxy", 1); // Render terminates TLS upstream; needed for secure cookies
 app.use(express.json({ limit: "5mb" }));
 
+// --- Security headers ------------------------------------------------------------
+// Pages may only load their own scripts (no inline or third-party scripts), can't be framed by
+// other sites, and browsers are told to always use HTTPS. API and PDF responses skip the page
+// policy so Chrome's PDF viewer keeps working.
+app.use((req, res, next) => {
+  res.set({
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(self), geolocation=(), payment=()",
+  });
+  if (req.secure) res.set("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+  if (!req.path.startsWith("/api/")) {
+    res.set("Content-Security-Policy", [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com data:",
+      "img-src 'self' data: https:",
+      "connect-src 'self'",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self' https://accounts.google.com",
+      "object-src 'none'",
+    ].join("; "));
+  }
+  next();
+});
+
 // --- Optional shared-password protection -----------------------------------
 // Legacy stopgap, kept for local/dev use. If Google sign-in is configured
 // (below) it supersedes this — leave APP_USER/APP_PASSWORD unset once Google

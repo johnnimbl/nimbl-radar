@@ -5,7 +5,8 @@ const PgSession = require("connect-pg-simple")(session);
 // server's memory. Render's free plan restarts the server on every deploy and after ~15 minutes
 // idle; with memory-backed sessions each restart signed everyone out.
 function buildSession(pool) {
-  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+  const fourteenDays = 14 * 24 * 60 * 60 * 1000;
+  if (!process.env.SESSION_SECRET) console.warn("SESSION_SECRET is not set: using the development secret. Set it on the server.");
   return session({
     store: new PgSession({
       pool,
@@ -16,12 +17,12 @@ function buildSession(pool) {
     secret: process.env.SESSION_SECRET || "nimbl-radar-dev-secret-change-me",
     resave: false,
     saveUninitialized: false,
-    rolling: true, // each visit pushes the 30-day expiry forward
+    rolling: true, // each visit pushes the 14-day expiry forward; 14 days without a visit signs you out
     cookie: {
-      secure: process.env.NODE_ENV === "production",
+      secure: "auto", // Secure on HTTPS (Render), so the cookie never travels over plain HTTP
       httpOnly: true,
       sameSite: "lax",
-      maxAge: thirtyDays,
+      maxAge: fourteenDays,
     },
   });
 }

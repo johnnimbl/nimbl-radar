@@ -22,7 +22,7 @@ create table if not exists api_keys (
   revoked_at timestamptz
 );
 alter table api_keys enable row level security;
-create or replace function touch_lead() returns trigger language plpgsql as $$
+create or replace function touch_lead() returns trigger language plpgsql set search_path = public as $$
 declare lid text;
 begin
   if tg_op = 'DELETE' then lid := old.lead_id; else lid := new.lead_id; end if;

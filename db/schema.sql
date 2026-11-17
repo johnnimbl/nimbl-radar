@@ -285,7 +285,7 @@ alter table app_settings enable row level security;
 -- leads.updated_at, which the app sends back as "rev" when saving. putState refuses a lead whose
 -- revision moved on since the browser loaded it (see server/state.js), so writes from the Chrome
 -- extension, Claude or the morning scan can't be wiped out by a stale tab.
-create or replace function touch_lead() returns trigger language plpgsql as $$
+create or replace function touch_lead() returns trigger language plpgsql set search_path = public as $$
 declare lid text;
 begin
   if tg_op = 'DELETE' then lid := old.lead_id; else lid := new.lead_id; end if;
