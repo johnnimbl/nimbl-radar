@@ -77,6 +77,10 @@ alter table contacts add column if not exists last_contacted date;
 alter table contacts add column if not exists sequence_step integer not null default 0
   check (sequence_step between 0 and 5);
 alter table contacts add column if not exists is_primary boolean not null default false;
+-- Contacts the daily scan found itself (from public pages). The app flags them "check the title"
+-- until John confirms or logs a touch; source_url is where the scan saw the person.
+alter table contacts add column if not exists agent_found boolean not null default false;
+alter table contacts add column if not exists source_url text not null default '';
 
 -- One row per touch with a contact (LinkedIn request/message, email, call, meeting).
 -- contact_id is deliberately NOT a foreign key: every save rewrites a lead's

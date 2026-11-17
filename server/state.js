@@ -116,6 +116,8 @@ async function getState(pool) {
       lastContacted: dateOrEmpty(c.last_contacted),
       sequenceStep: c.sequence_step || 0,
       isPrimary: !!c.is_primary,
+      agentFound: !!c.agent_found,
+      sourceUrl: c.source_url || "",
       activities: (activitiesByContact[c.id] || []).map((a) => ({
         id: a.id, type: a.type, direction: a.direction, date: dateOrEmpty(a.activity_date), summary: a.summary || "",
       })),
@@ -178,6 +180,7 @@ function leadFingerprint(l, current) {
       c.id, c.name || "", c.title || "", c.email || "", c.phone || "", c.linkedin || "", c.roles || [],
       CONTACT_STAGES.includes(c.stage) ? c.stage : "Not contacted", d10(c.nextFollowUp), d10(c.lastContacted),
       Math.min(5, Math.max(0, parseInt(c.sequenceStep, 10) || 0)), c.isPrimary === true,
+      c.agentFound === true, String(c.sourceUrl || "").slice(0, 1000),
       arr(c.activities).map((a) => [
         a.id, ACTIVITY_TYPES.includes(a.type) ? a.type : "Note",
         ACTIVITY_DIRECTIONS.includes(a.direction) ? a.direction : "Outbound", d10(a.date), a.summary || "",
@@ -262,13 +265,14 @@ async function putState(pool, state) {
       for (let i = 0; i < contacts.length; i++) {
         const c = contacts[i];
         await client.query(
-          `insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order, stage, next_follow_up, last_contacted, sequence_step, is_primary)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          `insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order, stage, next_follow_up, last_contacted, sequence_step, is_primary, agent_found, source_url)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
           [
             c.id, l.id, c.name || "", c.title || "", c.email || "", c.phone || "", c.linkedin || "", c.roles || [], i,
             CONTACT_STAGES.includes(c.stage) ? c.stage : "Not contacted",
             dateOrNull(c.nextFollowUp), dateOrNull(c.lastContacted),
             Math.min(5, Math.max(0, parseInt(c.sequenceStep, 10) || 0)), c.isPrimary === true,
+            c.agentFound === true, String(c.sourceUrl || "").slice(0, 1000),
           ]
         );
         const acts = Array.isArray(c.activities) ? c.activities : [];

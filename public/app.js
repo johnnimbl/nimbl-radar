@@ -445,6 +445,23 @@
     return best;
   }
 
+  // Contacts the daily scan found on public pages: shown with "check title" until you confirm,
+  // edit their name/title, or log a touch with them.
+  function agentFoundContacts(l) { return (l.contacts || []).filter(function (c) { return c.agentFound; }); }
+  function markContactChecked(id, cid) {
+    var c = findContact(findLead(id), cid);
+    if (!c || !c.agentFound) return;
+    c.agentFound = false;
+    persist();
+  }
+  function renderAgentFoundNote(l, c) {
+    if (!c.agentFound) return "";
+    var src = /^https?:\/\//.test(c.sourceUrl || "") ? ' <a href="' + escapeHtml(c.sourceUrl) + '" target="_blank" rel="noopener">where it was found ↗</a>' : '';
+    return '<div class="agent-found"><span class="af-tag">Found by the agent</span>' +
+      '<span class="af-text">Check ' + escapeHtml((c.name || "this person").split(" ")[0]) + '\'s current title on LinkedIn before reaching out.' + src + '</span>' +
+      (readOnly ? "" : '<button type="button" class="btn btn-sm" data-action="contact-checked" data-id="' + l.id + '" data-cid="' + c.id + '">Title checked</button>') + '</div>';
+  }
+
   // The first contact: the one you flagged, otherwise the best fit by title.
   function firstContact(l) {
     var flagged = (l.contacts || []).filter(function (c) { return c.isPrimary; })[0];
@@ -744,6 +761,7 @@
           '</select>' +
           (readOnly ? "" : '<button class="btn btn-ghost btn-sm" type="button" data-action="remove-contact" data-id="' + l.id + '" data-cid="' + c.id + '" aria-label="Remove contact">✕</button>') +
         '</div>' +
+        renderAgentFoundNote(l, c) +
         '<div class="ct-crm">' +
           renderSequenceBlock(l, c) +
           '<div class="ct-meta">' +
@@ -1094,7 +1112,9 @@
     var rows = '' +
       '<tr class="lead-row" data-expanded="' + expanded + '" data-action="toggle-row" data-id="' + l.id + '">' +
         '<td>' + (l.isNew ? '<span class="newtag">NEW</span>' : '<svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>') + '</td>' +
-        '<td><div class="company-cell"><div><div class="nm">' + escapeHtml(l.company) + (l.status === "Won" ? '<span class="client-badge">Client</span>' : '') +  (leadDueCount(l) > 0 ? '<span class="due-badge due-today" style="margin-left:6px">Follow-up due</span>' : '') + '</div><span class="role-tag">' + escapeHtml(l.jobTitle) + '</span></div></div></td>' +
+        '<td><div class="company-cell"><div><div class="nm">' + escapeHtml(l.company) + (l.status === "Won" ? '<span class="client-badge">Client</span>' : '') +  (leadDueCount(l) > 0 ? '<span class="due-badge due-today" style="margin-left:6px">Follow-up due</span>' : '') + '</div><span class="role-tag">' + escapeHtml(l.jobTitle) + '</span>' +
+          (agentFoundContacts(l).length ? '<span class="ct-hint">' + agentFoundContacts(l).length + (agentFoundContacts(l).length === 1 ? ' person' : ' people') + ' found · check title' + (agentFoundContacts(l).length === 1 ? '' : 's') + '</span>' : '') +
+          '</div></div></td>' +
         '<td>' + escapeHtml(l.roleType) + '</td>' +
         '<td><span class="pill ' + priorityClass(l.priority) + '">' + l.priority + '</span></td>' +
         '<td class="mono">' + escapeHtml(l.estSize) + '</td>' +
@@ -1334,7 +1354,7 @@
       add({ key: "start-" + c.id, kind: "start", lead: l, contact: c, owner: "both",
         score: 35 + prioBoost(l) + (rd !== null && rd <= 7 ? 4 : 0),
         action: "Send a connection request to " + (c.name || "(unnamed contact)"),
-        why: bits.join(", ") + ". Nobody there has been approached yet.",
+        why: bits.join(", ") + ". Nobody there has been approached yet." + (c.agentFound ? " Found by the agent, so check the title on LinkedIn first." : ""),
         badge: '<span class="due-badge due-soon">Not started</span>',
         touch: SEQUENCE[0], draft: messageDraft(l, c, 1), logLabel: "Log touch 1", paced: true });
     });
@@ -1469,7 +1489,7 @@
     if (!l || !hit) return;
     var x = hit.draft.meta || {};
     var cid = "c" + Date.now().toString(36);
-    l.contacts.push({ id: cid, name: x.name || "", title: x.title || "", email: "", phone: "", linkedin: x.linkedin || "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", sequenceStep: 0, isPrimary: false, activities: [] });
+    l.contacts.push({ id: cid, name: x.name || "", title: x.title || "", email: "", phone: "", linkedin: x.linkedin || "", roles: [], stage: "Not contacted", nextFollowUp: "", lastContacted: "", sequenceStep: 0, isPrimary: false, agentFound: true, sourceUrl: x.source || "", activities: [] });
     closeDraft(id, "used");
     persist();
     toast((x.name || "Contact") + " added to " + l.company + ".");
@@ -2507,6 +2527,7 @@
       type: f.type, direction: f.direction, date: date, summary: (f.summary || "").trim()
     });
     c.lastContacted = latestTouchDate(c);
+    if (f.type !== "Note") c.agentFound = false; // you have dealt with this person, so the title was checked
     var newStep = stepAfterLog(c, f, f.moveStage || c.stage || "Not contacted"); // before the stage changes
     if (f.moveStage) c.stage = f.moveStage;
     c.sequenceStep = newStep;
@@ -2883,6 +2904,7 @@
     if (action === "crm-remove") { removeFromCrm(id); return; }
     if (action === "crm-open") { openClient(id); return; }
     if (action === "crm-back") { closeClient(); return; }
+    if (action === "contact-checked") { markContactChecked(id, cid); return; }
     if (action === "crm-filter") { crmFilter = t.getAttribute("data-value"); render(); return; }
     if (action === "crm-layout") { crmLayout = t.getAttribute("data-value") === "list" ? "list" : "cards"; saveCrmView(); render(); return; }
     if (action === "crm-sort-col") {
@@ -2999,7 +3021,11 @@
     if (action === "edit-contact") {
       var l = findLead(id);
       var c = findContact(l, cid);
-      if (c) { c[t.getAttribute("data-field")] = t.value.trim(); persist({ noRender: true }); }
+      if (c) {
+        var ef = t.getAttribute("data-field");
+        c[ef] = t.value.trim();
+        if (c.agentFound && (ef === "name" || ef === "title")) { c.agentFound = false; persist(); } else { persist({ noRender: true }); }
+      }
       return;
     }
     if (action === "edit-candidate-field") {

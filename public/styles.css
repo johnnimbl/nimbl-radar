@@ -572,3 +572,9 @@ th.cl-col-last{white-space:nowrap;}
 .th-sort{all:unset;cursor:pointer;font:inherit;letter-spacing:inherit;text-transform:inherit;color:inherit;}
 .th-sort:hover, .th-sort.on{color:var(--ink);}
 .th-sort:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
+
+/* Contacts the daily scan found itself */
+.agent-found{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin:8px 0 2px;padding:8px 10px;border:1px dashed var(--warn);border-radius:8px;background:var(--paper);font-size:.78rem;line-height:1.4;}
+.af-tag{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--warn);border:1px solid currentColor;border-radius:999px;padding:2px 8px;white-space:nowrap;}
+.af-text{flex:1;min-width:180px;color:var(--ink-soft);}
+.ct-hint{display:block;margin-top:3px;font-size:.7rem;font-weight:600;color:var(--warn);}
