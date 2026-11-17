@@ -80,6 +80,10 @@ async function getState(pool) {
 
   const leads = leadsRes.rows.map((l) => ({
     id: l.id,
+    // Revision: changes whenever the lead or any of its contacts, activities, notes, documents or
+    // candidates change (a trigger keeps leads.updated_at current). A save that was based on an
+    // older revision is refused for that lead, so a stale tab can't wipe out newer work.
+    rev: l.updated_at ? l.updated_at.toISOString() : "",
     company: l.company,
     website: l.website || "",
     roleType: l.role_type || "",
@@ -223,9 +227,11 @@ async function putState(pool, state) {
     // scan adds leads directly to the database, so a stale browser tab must never wipe them out.
 
     let written = 0;
+    const conflicts = [];
     for (const l of leads) {
       const current = storedById[l.id];
       if (current && leadFingerprint(l, current) === leadFingerprint(current, current)) continue;
+      if (current && l.rev && current.rev && l.rev !== current.rev) { conflicts.push(l.id); continue; }
       written++;
       await client.query(
         `insert into leads (id, company, website, role_type, job_title, job_url, date_posted, date_added,
@@ -328,7 +334,7 @@ async function putState(pool, state) {
     }
 
     await client.query("COMMIT");
-    return { written, total: leads.length };
+    return { written, total: leads.length, conflicts };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;

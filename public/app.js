@@ -52,6 +52,8 @@
   var backupInfo = null;              // Google Drive backup status from the server
   var backupOpen = false;             // backup panel open
   var backupBusy = false;
+  var extKeys = null;                 // Chrome extension keys (labels only)
+  var extNewKey = "";                 // a key just created, shown once
   var uploading = {};                 // "leadId|contactId" -> number of uploads in flight
   var filesPending = 0;               // uploads/deletes in flight; a refresh must not overwrite them
   var FILE_EXTS = ["pdf", "png", "jpg", "jpeg", "webp", "gif", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv", "rtf"];
@@ -1140,8 +1142,40 @@
         '</div>' +
         '<p class="help">Backups run when Radar is in use and the last one is a week old.</p>';
     }
-    return '<div class="bk-panel" role="region" aria-label="Backups">' + body +
-      '<p class="help"><a href="/api/backup/download">Download a copy to this device</a></p></div>';
+    return '<div class="bk-panel" role="region" aria-label="Settings">' +
+      '<h3 class="bk-h">Backups</h3>' + body +
+      '<p class="help"><a href="/api/backup/download">Download a copy to this device</a></p>' +
+      renderExtensionSettings() + '</div>';
+  }
+
+  function loadExtKeys() {
+    return fetch("/api/extension-keys").then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d) { extKeys = d.items; if (backupOpen) render(); } }).catch(function () {});
+  }
+
+  function renderExtensionSettings() {
+    var keys = extKeys || [];
+    var list = keys.map(function (k) {
+      return '<li><span class="mono">' + escapeHtml(k.prefix) + '…</span> ' + escapeHtml(k.label || "Chrome extension") +
+        '<span class="help"> · created ' + fmtDate(String(k.createdAt).slice(0, 10)) + (k.lastUsedAt ? ', last used ' + fmtDate(String(k.lastUsedAt).slice(0, 10)) : ', not used yet') + '</span>' +
+        (readOnly ? '' : ' <button type="button" class="btn-link jd-del" data-action="ext-key-revoke" data-value="' + escapeHtml(k.id) + '">Revoke</button>') + '</li>';
+    }).join("");
+    return '<h3 class="bk-h">Chrome extension</h3>' +
+      '<p>Use Radar on LinkedIn: see who is already in Radar, save people in one click, insert drafts and log touches.</p>' +
+      '<p class="help">1. <a href="/downloads/nimbl-radar-extension.zip" download>Download the extension</a> and unzip it. ' +
+      '2. In Chrome open <span class="mono">chrome://extensions</span>, turn on Developer mode, click “Load unpacked” and pick the unzipped folder. ' +
+      '3. Create a key below and paste it into the extension.</p>' +
+      (extNewKey ? '<div class="ext-key"><p><strong>Your new key</strong> (shown once, copy it now):</p><code class="mono" id="ext-new-key">' + escapeHtml(extNewKey) + '</code>' +
+        '<div class="jd-actions"><button type="button" class="btn btn-sm btn-primary" data-action="ext-key-copy">Copy key</button><button type="button" class="btn-link" data-action="ext-key-hide">Done</button></div></div>' : '') +
+      (list ? '<ul class="ext-keys">' + list + '</ul>' : '') +
+      (readOnly ? '' : '<div class="jd-actions"><button type="button" class="btn btn-sm" data-action="ext-key-new">Create a key for this browser</button></div>');
+  }
+
+  function createExtKey() {
+    fetch("/api/extension-keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: "Chrome extension" }) })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (d) { extNewKey = d.key; return loadExtKeys(); }).then(render)
+      .catch(function (err) { toast("Couldn't create a key: " + err.message); });
   }
 
   function runBackupNow() {
@@ -2592,7 +2626,7 @@
             '</div>' : '') +
           '<div class="scan-meta" title="A scan for new roles runs automatically every day">Last scanned<br><span class="mono">' + fmtDate(state.lastScanned) + '</span></div>' +
           '<button class="btn" type="button" data-action="refresh-scan" title="Load the newest leads from the daily scan">↻ Refresh</button>' +
-          '<button class="btn bk-btn" type="button" data-action="backup-toggle" aria-expanded="' + backupOpen + '" title="Google Drive backups"><span class="bk-dot ' + (backupHealthy() ? 'ok' : 'warn') + '" aria-hidden="true"></span>Backup</button>' +
+          '<button class="btn bk-btn" type="button" data-action="backup-toggle" aria-expanded="' + backupOpen + '" title="Backups and the Chrome extension"><span class="bk-dot ' + (backupHealthy() ? 'ok' : 'warn') + '" aria-hidden="true" title="' + (backupHealthy() ? 'Backups are up to date' : 'Backups need attention') + '"></span>Settings</button>' +
           (readOnly ? "" : '<button class="btn btn-primary" type="button" data-action="open-add">+ Add lead</button>') +
         '</div>' +
       '</div>' +
@@ -2663,10 +2697,26 @@
       return res.json();
     }).then(function (freshState) {
       saveInFlight = false;
-      if (dirty) { flushSave(); return; } // newer edits exist: save those next, keep what's on screen
+      var conflicts = freshState.conflicts || [];
+      var freshById = {};
+      freshState.leads.forEach(function (fl) { freshById[fl.id] = fl; });
+      if (conflicts.length) {
+        // Someone else (the Chrome extension, Claude, the morning scan or another tab) changed these
+        // companies since this tab loaded them. Their version wins; show it instead of ours.
+        state.leads = state.leads.map(function (l) { return conflicts.indexOf(l.id) !== -1 && freshById[l.id] ? freshById[l.id] : l; });
+        var names = conflicts.map(function (id) { return freshById[id] ? freshById[id].company : id; });
+        toast(names.join(", ") + (names.length === 1 ? " was" : " were") + " updated elsewhere, so the latest version is shown. If your last change there is missing, please make it again.");
+      }
+      if (dirty) {
+        // newer edits exist: keep what's on screen, but carry the new revisions so the next save isn't refused
+        state.leads.forEach(function (l) { if (freshById[l.id]) l.rev = freshById[l.id].rev; });
+        flushSave();
+        return;
+      }
       pendingSave = false;
+      delete freshState.conflicts;
       state = freshState;
-      if (!userIsEditing()) render();
+      if (conflicts.length || !userIsEditing()) render();
     }).catch(function (err) {
       saveInFlight = false;
       dirty = true; // keep the edits; they go out with the next save
@@ -3159,7 +3209,20 @@
     if (action === "crm-open") { openClient(id); return; }
     if (action === "crm-back") { closeClient(); return; }
     if (action === "contact-checked") { markContactChecked(id, cid); return; }
-    if (action === "backup-toggle") { backupOpen = !backupOpen; render(); if (backupOpen) loadBackupStatus(); return; }
+    if (action === "backup-toggle") { backupOpen = !backupOpen; if (!backupOpen) extNewKey = ""; render(); if (backupOpen) { loadBackupStatus(); loadExtKeys(); } return; }
+    if (action === "ext-key-new") { createExtKey(); return; }
+    if (action === "ext-key-hide") { extNewKey = ""; render(); return; }
+    if (action === "ext-key-copy") {
+      var kk = extNewKey;
+      (navigator.clipboard ? navigator.clipboard.writeText(kk) : Promise.reject()).then(function () { toast("Key copied. Paste it into the extension."); })
+        .catch(function () { var el = document.getElementById("ext-new-key"); if (el) { var rg = document.createRange(); rg.selectNodeContents(el); var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rg); } toast("Select the key and copy it."); });
+      return;
+    }
+    if (action === "ext-key-revoke") {
+      if (!window.confirm("Revoke this key? The extension using it will stop working until you add a new key.")) return;
+      fetch("/api/extension-keys/" + encodeURIComponent(t.getAttribute("data-value")), { method: "DELETE" }).then(loadExtKeys).then(function () { toast("Key revoked."); render(); });
+      return;
+    }
     if (action === "backup-run") { runBackupNow(); return; }
     if (action === "backup-disconnect") { disconnectBackup(); return; }
     if (action === "jd-new") { jdNew[id] = true; render(); var nu = document.getElementById("jd-new-text-" + id); if (nu) nu.focus(); return; }

@@ -608,3 +608,9 @@ th.cl-col-last{white-space:nowrap;}
 .bk-panel{border:1px solid var(--ink);border-radius:12px;background:var(--surface);padding:14px 16px;margin:0 0 18px;display:flex;flex-direction:column;gap:8px;font-size:.86rem;line-height:1.5;max-width:640px;margin-left:auto;}
 .bk-panel p{margin:0;}
 .bk-err{color:var(--critical);}
+
+.bk-h{font-size:.95rem;margin:4px 0 0;}
+.bk-h:not(:first-child){border-top:1px solid rgba(13,1,41,.14);padding-top:12px;margin-top:8px;}
+.ext-key{border:1px dashed var(--ink);border-radius:10px;padding:10px 12px;background:var(--paper);display:flex;flex-direction:column;gap:8px;}
+.ext-key code{word-break:break-all;font-size:.8rem;background:var(--surface-2);padding:6px 8px;border-radius:6px;}
+.ext-keys{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;font-size:.82rem;}

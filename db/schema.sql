@@ -280,3 +280,41 @@ create table if not exists app_settings (
   updated_at timestamptz not null default now()
 );
 alter table app_settings enable row level security;
+
+-- Lead revisions: any change to a lead's contacts, activities, notes, documents or candidates bumps
+-- leads.updated_at, which the app sends back as "rev" when saving. putState refuses a lead whose
+-- revision moved on since the browser loaded it (see server/state.js), so writes from the Chrome
+-- extension, Claude or the morning scan can't be wiped out by a stale tab.
+create or replace function touch_lead() returns trigger language plpgsql as $$
+declare lid text;
+begin
+  if tg_op = 'DELETE' then lid := old.lead_id; else lid := new.lead_id; end if;
+  update leads set updated_at = now() where id = lid and updated_at <> now();
+  if tg_op = 'UPDATE' and old.lead_id is distinct from new.lead_id then
+    update leads set updated_at = now() where id = old.lead_id and updated_at <> now();
+  end if;
+  return null;
+end $$;
+drop trigger if exists touch_lead_contacts on contacts;
+create trigger touch_lead_contacts after insert or update or delete on contacts for each row execute function touch_lead();
+drop trigger if exists touch_lead_activities on activities;
+create trigger touch_lead_activities after insert or update or delete on activities for each row execute function touch_lead();
+drop trigger if exists touch_lead_notes on lead_notes;
+create trigger touch_lead_notes after insert or update or delete on lead_notes for each row execute function touch_lead();
+drop trigger if exists touch_lead_documents on documents;
+create trigger touch_lead_documents after insert or update or delete on documents for each row execute function touch_lead();
+drop trigger if exists touch_lead_candidates on candidates;
+create trigger touch_lead_candidates after insert or update or delete on candidates for each row execute function touch_lead();
+
+-- Keys for the Nimbl Radar Chrome extension (created in Radar → Settings, stored hashed).
+create table if not exists api_keys (
+  id text primary key default gen_random_uuid()::text,
+  key_hash text not null unique,
+  label text not null default '',
+  prefix text not null default '',
+  created_by text not null default '',
+  created_at timestamptz not null default now(),
+  last_used_at timestamptz,
+  revoked_at timestamptz
+);
+alter table api_keys enable row level security;

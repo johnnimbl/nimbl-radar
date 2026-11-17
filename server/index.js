@@ -10,6 +10,7 @@ const { listFiles, saveFile, getFile, deleteFile, MAX_FILE_BYTES } = require("./
 const { listJds, getJd, createJd, updateJd, deleteJd } = require("./jds");
 const { renderJobDescriptionPdf } = require("./jdpdf");
 const backup = require("./backup");
+const ext = require("./ext");
 const crypto = require("crypto");
 const { configurePassport, ensureAuthenticated, googleLoginEnabled, ALLOWED_DOMAIN } = require("./auth");
 
@@ -82,6 +83,39 @@ app.get("/api/state", ensureAuthenticated, async (req, res) => {
   }
 });
 
+// --- Chrome extension: keys (managed in Radar) and the key-authenticated API ----
+app.get("/api/extension-keys", ensureAuthenticated, async (req, res) => {
+  try { res.json({ items: await ext.listKeys(pool) }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to load keys." }); }
+});
+app.post("/api/extension-keys", ensureAuthenticated, async (req, res) => {
+  try { res.json({ key: await ext.createKey(pool, (req.body || {}).label, req.user && req.user.email) }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to create a key." }); }
+});
+app.delete("/api/extension-keys/:id", ensureAuthenticated, async (req, res) => {
+  try { await ext.revokeKey(pool, req.params.id); res.json({ ok: true }); } catch (err) { console.error(err); res.status(500).json({ error: "Failed to revoke the key." }); }
+});
+const extApi = express.Router();
+extApi.use(ext.keyAuth(pool));
+const wrap = (fn) => async (req, res) => {
+  try { res.json(await fn(req)); } catch (err) {
+    if (!err.status) console.error(err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : "Something went wrong in Radar." });
+  }
+};
+extApi.get("/ping", wrap(async (req) => ({ ok: true, user: req.extUser })));
+extApi.get("/lookup", wrap((req) => ext.lookup(pool, req.query)));
+extApi.get("/leads", wrap(async (req) => ({ items: await ext.searchLeads(pool, req.query.q) })));
+extApi.post("/contacts", wrap((req) => ext.addContact(pool, req.body || {})));
+extApi.post("/contacts/:id/checked", wrap((req) => ext.markChecked(pool, req.params.id)));
+extApi.post("/activities", wrap((req) => ext.logActivity(pool, req.body || {})));
+extApi.post("/notes", wrap((req) => ext.addNote(pool, req.body || {})));
+extApi.post("/job-descriptions", wrap(async (req) => {
+  const b = req.body || {};
+  const lead = await pool.query("select id from leads where id = $1", [String(b.leadId || "")]);
+  if (!lead.rows.length) throw Object.assign(new Error("Pick a company in Radar first."), { status: 400 });
+  return createJd(pool, b.leadId, { sourceUrl: b.sourceUrl, sourceText: b.sourceText }, { email: req.extUser || "" });
+}));
+app.use("/api/ext", extApi);
+
 // --- Backups (Google Drive + download) ----------------------------------------
 app.get("/auth/drive", ensureAuthenticated, (req, res) => {
   if (!backup.driveConfigured()) return res.status(400).send("Google sign-in isn't configured on this server.");
@@ -123,8 +157,10 @@ app.get("/api/backup/download", ensureAuthenticated, async (req, res) => {
 
 app.put("/api/state", ensureAuthenticated, async (req, res) => {
   try {
-    await putState(pool, req.body || {});
-    res.json(await getState(pool));
+    const result = await putState(pool, req.body || {});
+    const fresh = await getState(pool);
+    fresh.conflicts = result.conflicts || [];
+    res.json(fresh);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to save state." });
@@ -308,6 +344,7 @@ const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Nimbl Radar listening on http://localhost:${port}`);
   backup.ensureSettingsTable(pool).catch((err) => console.error("app_settings:", err.message));
+  ext.ensureSchema(pool).catch((err) => console.error("extension schema:", err.message));
   // While the server is awake, look for a due weekly backup every 3 hours.
   setInterval(() => backup.backupIfDue(pool).catch((err) => console.error("Weekly backup failed:", err.message)), 3 * 3600 * 1000);
 });

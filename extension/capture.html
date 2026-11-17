@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add to Radar</title>
+<link rel="stylesheet" href="ui.css">
+</head>
+<body>
+<main class="wrap">
+  <div class="brand"><img src="icons/icon48.png" alt=""><h1>Add to Radar</h1></div>
+  <label for="text">Text
+    <textarea id="text" rows="8"></textarea>
+  </label>
+  <p class="help" id="src"></p>
+  <fieldset class="card" style="margin:0">
+    <legend class="help" style="padding:0 6px">Save it as</legend>
+    <label class="row" style="flex-direction:row;color:var(--ink)"><input type="radio" name="kind" value="note" checked> A note on the company</label>
+    <label class="row" style="flex-direction:row;color:var(--ink)"><input type="radio" name="kind" value="jd"> A job posting (for a Nimbl job description)</label>
+  </fieldset>
+  <label for="q">Company in Radar
+    <input type="search" id="q" placeholder="Search companies…" autocomplete="off">
+  </label>
+  <div class="list" id="leads" role="listbox" aria-label="Companies"></div>
+  <div class="row">
+    <button class="btn btn-primary" id="save" type="button" disabled>Save to Radar</button>
+    <button class="btn" id="cancel" type="button">Close</button>
+  </div>
+  <div id="out" role="status" aria-live="polite"></div>
+</main>
+<script src="capture.js"></script>
+</body>
+</html>
