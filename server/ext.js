@@ -111,11 +111,22 @@ async function lookup(pool, q) {
       [slug.replace(/[^a-z0-9%_-]/g, "")]);
     if (r.rows.length) contact = await loadContact(pool, r.rows[0].id);
   }
-  if (!contact && q.name && q.company) {
-    // Same name at a matching company, but no LinkedIn URL stored yet.
-    const r = await pool.query("select c.id, c.name, l.company from contacts c join leads l on l.id = c.lead_id where lower(c.name) = lower($1)", [String(q.name).trim()]);
-    const hit = r.rows.find((x) => norm(x.company) && norm(x.company) === norm(q.company));
-    if (hit) contact = await loadContact(pool, hit.id);
+  if (!contact && q.name) {
+    // Saved without a LinkedIn URL (or with a different one): match on the name, using the company
+    // to choose when the same name appears more than once. Then remember the URL for next time.
+    const r = await pool.query(
+      "select c.id, c.linkedin, l.company from contacts c join leads l on l.id = c.lead_id where lower(regexp_replace(c.name, '\\s+', ' ', 'g')) = lower($1)",
+      [String(q.name).replace(/\s+/g, " ").trim()]);
+    const co = norm(q.company);
+    const sameCo = (x) => co && norm(x.company) && (norm(x.company) === co || norm(x.company).startsWith(co) || co.startsWith(norm(x.company)));
+    const withoutUrl = r.rows.filter((x) => !profileSlug(x.linkedin));
+    const hit = r.rows.find(sameCo) || (withoutUrl.length === 1 && r.rows.length === 1 ? withoutUrl[0] : null);
+    if (hit) {
+      if (slug && !profileSlug(hit.linkedin)) {
+        await pool.query("update contacts set linkedin = $2 where id = $1", [hit.id, "https://www.linkedin.com/in/" + slug + "/"]);
+      }
+      contact = await loadContact(pool, hit.id);
+    }
   }
   const companies = q.company ? await matchLeads(pool, q.company) : [];
   return { contact, companies };

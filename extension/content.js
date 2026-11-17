@@ -47,17 +47,39 @@
     return null;
   }
 
+  // LinkedIn's profile markup changes often (2026: obfuscated class names, the name in an <h2>), so
+  // this leans on things that rarely change: the page title, the heading text, the order of the
+  // lines under the name, "View company:" / "Current company:" labels and the "Contact info" link.
   function readProfile(slug) {
-    const main = document.querySelector("main") || document;
-    const h1 = main.querySelector("h1");
-    const name = text(h1);
-    if (!name) return null;
-    const top = (h1 && (h1.closest("section") || h1.parentElement && h1.parentElement.parentElement)) || main;
-    const title = text(top.querySelector(".text-body-medium.break-words, .text-body-medium")) || "";
-    const location = text(top.querySelector("span.text-body-small.inline.t-black--light.break-words, .pv-text-details__left-panel .text-body-small")) || "";
+    const main = document.querySelector("main") || document.body;
+    let name = (document.title || "").replace(/^\(\d+\)\s*/, "").split(" | ")[0].trim();
+    if (/^linkedin$/i.test(name)) name = "";
+    const heads = [...main.querySelectorAll("h1, h2")];
+    let head = heads.find((h) => name && text(h) === name) || main.querySelector("h1");
+    if (!name && head) name = text(head);
+    if (!name || !head) return null;
+    // the top card: the nearest ancestor that also holds the "Contact info" link (or a few lines of text)
+    let card = head;
+    for (let i = 0; i < 10 && card.parentElement; i++) {
+      card = card.parentElement;
+      if (card.querySelector('a[href*="contact-info"]') || card.querySelectorAll("p, .text-body-medium").length >= 4) break;
+    }
+    const lines = [...card.querySelectorAll("p, div.text-body-medium, span.text-body-small")]
+      .filter((e) => !e.querySelector("p"))
+      .map((e) => text(e))
+      .filter((t, i, a) => t && a.indexOf(t) === i)
+      .filter((t) => t !== name && !/^·?\s*(1st|2nd|3rd\+?|3rd)$/i.test(t) && t !== "·" && !/^contact info$/i.test(t) &&
+        !/connections?$/i.test(t) && !/mutual connection/i.test(t) && !/^\(?(he|she|they|ze|xe)\/\w+\)?$/i.test(t));
+    const title = lines[0] || "";
+    const location = lines.slice(1).find((t) => /,/.test(t) && t.length < 80) || "";
+    // Under the headline LinkedIn shows "Current company · School"; otherwise use the labels.
     let company = "";
-    const cur = main.querySelector('button[aria-label^="Current company"], a[aria-label^="Current company"], [aria-label^="Current company"]');
-    if (cur) company = (cur.getAttribute("aria-label") || "").replace(/^Current company:?\s*/i, "").replace(/\.\s*Click.*$/i, "").trim();
+    const second = lines[1] || "";
+    if (second && second !== location && !/,/.test(second)) company = second.split(" · ")[0].trim();
+    if (!company) {
+      const coEl = card.querySelector('[aria-label^="Current company"], a[aria-label^="View company:"]');
+      if (coEl) company = (coEl.getAttribute("aria-label") || "").replace(/^(Current company|View company):?\s*/i, "").replace(/\.\s*Click.*$/i, "").trim();
+    }
     if (!company) { const m = /(?:\bat\b|@)\s+([^|,·•]+)/i.exec(title); if (m) company = m[1].trim(); }
     return { slug, linkedin: "https://www.linkedin.com/in/" + slug + "/", name, title, location, company };
   }
@@ -78,7 +100,8 @@
       if (!s || s === mine) return;
       counts[s] = (counts[s] || 0) + (a.closest(".msg-entity-lockup, .msg-thread__link-to-profile, header") ? 5 : 1);
     });
-    const slug = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || "";
+    const headerLink = scope.querySelector('.msg-thread__link-to-profile[href*="/in/"], .msg-entity-lockup a[href*="/in/"]');
+    const slug = (headerLink && slugOf(headerLink.getAttribute("href"))) || Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || "";
     const titleEl = scope.querySelector(".msg-entity-lockup__entity-title, h2.msg-entity-lockup__entity-title, .msg-thread__link-to-profile");
     firstName = text(titleEl);
     if (!slug && !firstName) return null;
@@ -113,7 +136,7 @@
   }, true);
 
   function findBox() {
-    const modal = document.querySelector('.artdeco-modal textarea[name="message"], .artdeco-modal #custom-message, .artdeco-modal textarea');
+    const modal = document.querySelector('.artdeco-modal textarea[name="message"], .artdeco-modal #custom-message, .artdeco-modal textarea, [role="dialog"] textarea');
     const editors = [...document.querySelectorAll('.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"]')].reverse();
     return [modal, lastEditable, ...editors].find((el) => el && visible(el)) || null;
   }
