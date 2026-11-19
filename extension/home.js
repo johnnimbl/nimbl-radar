@@ -35,11 +35,12 @@
         tile(t.titleChecks.length, "Titles to check", "found by the scan", "") +
       "</div>";
     const rows = [];
-    fu.slice(0, 6).forEach((f) => rows.push(
+    const cap = ctx.wide ? 10 : 8;
+    fu.slice(0, cap - 2).forEach((f) => rows.push(
       '<li><span class="hm-due' + (f.daysOver > 0 ? " over" : "") + '">' + (f.daysOver > 0 ? f.daysOver + "d late" : "Today") + "</span>" +
       '<span class="hm-main"><span>' + L.person(f, esc(f.name)) + ' <span class="hm-sub">· ' + esc(f.company) + "</span></span>" +
       '<span class="hm-why">' + esc(TOUCH[f.touch] || "Follow-up") + " · " + esc(f.stage) + "</span></span></li>"));
-    t.drafts.people.slice(0, Math.max(0, 8 - rows.length)).forEach((p) => rows.push(
+    t.drafts.people.slice(0, Math.max(0, cap - rows.length)).forEach((p) => rows.push(
       '<li><span class="hm-due draft">Draft</span><span class="hm-main"><span>' + (p.contactId ? L.person(p, esc(p.name)) : L.company(p)) +
       (p.contactId ? ' <span class="hm-sub">· ' + esc(p.company) + "</span>" : "") + "</span>" +
       '<span class="hm-why">' + (p.kind === "reengage" ? "New role message" : esc(TOUCH[p.touch] || "Message")) + " ready to send</span></span></li>"));
@@ -88,18 +89,28 @@
   function fresh(d, ctx) {
     const L = links(ctx);
     const nl = d.fresh.newLeads, nr = d.fresh.newRoles;
-    let h = '<section class="hm-sec" aria-label="New"><h3>New this week</h3>' +
-      '<div class="hm-tiles two">' + tile(nl.length, "New companies", "last 7 days", "") + tile(nr.length, "New roles", "at your CRM companies", nr.length ? "hot" : "") + "</div>";
-    const rows = [];
-    nr.slice(0, 4).forEach((a) => rows.push('<li><span class="hm-due role">Role</span><span class="hm-main">' +
+    const roleRow = (a) => '<li><span class="hm-due role">Role</span><span class="hm-main">' +
       (a.url ? '<a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.jobTitle) + "</a>" : esc(a.jobTitle)) +
-      '<span class="hm-why">' + esc(a.company) + " · found " + esc(fmtDay(a.found)) + "</span></span></li>"));
-    nl.slice(0, 5).forEach((l) => rows.push('<li><span class="hm-due' + (l.priority === "High" ? " high" : "") + '">' + esc(l.priority) + "</span>" +
+      '<span class="hm-why">' + esc(a.company) + " · found " + esc(fmtDay(a.found)) + "</span></span></li>";
+    const leadRow = (l) => '<li><span class="hm-due' + (l.priority === "High" ? " high" : "") + '">' + esc(l.priority) + "</span>" +
       '<span class="hm-main">' + L.company({ leadId: l.id, company: l.company, inCrm: l.inCrm }) +
-      '<span class="hm-why">' + esc(l.jobTitle) + " · added " + esc(fmtDay(l.dateAdded)) + "</span></span></li>"));
-    if (rows.length) h += '<ul class="hm-list">' + rows.join("") + "</ul>";
-    h += '<p class="hm-foot">Last morning scan: ' + (d.lastScanned ? esc(fmtDay(d.lastScanned)) : "not yet") + "</p></section>";
-    return h;
+      '<span class="hm-why">' + esc(l.jobTitle) + " · added " + esc(fmtDay(l.dateAdded)) + "</span></span></li>";
+    const rolesTile = tile(nr.length, "New roles", "at your CRM companies", nr.length ? "hot" : "");
+    const leadsTile = tile(nl.length, "New companies", "last 7 days", "");
+    const list = (rows) => (rows.length ? '<ul class="hm-list">' + rows.join("") + "</ul>" : "");
+    const moreLink = (n, hash) => (n > 0 ? '<a class="hm-more" href="' + esc((ctx.radarUrl || "") + "/" + hash) + '" target="_blank" rel="noopener">' + n + " more in Radar ↗</a>" : "");
+    const foot = '<p class="hm-foot">Last morning scan: ' + (d.lastScanned ? esc(fmtDay(d.lastScanned)) : "not yet") + "</p>";
+    if (ctx.wide) {
+      // Full width: new roles on the left, new companies on the right, each with its own list.
+      const R = 8;
+      return '<section class="hm-sec hm-full" aria-label="New"><h3>New this week</h3><div class="hm-pair">' +
+        '<div class="hm-col">' + rolesTile + list(nr.slice(0, R).map(roleRow)) + moreLink(nr.length - R, "#crm") + "</div>" +
+        '<div class="hm-col">' + leadsTile + list(nl.slice(0, R).map(leadRow)) + moreLink(nl.length - R, "#leads") + "</div>" +
+        "</div>" + foot + "</section>";
+    }
+    return '<section class="hm-sec" aria-label="New"><h3>New this week</h3>' +
+      '<div class="hm-tiles two">' + leadsTile + rolesTile + "</div>" +
+      list(nr.slice(0, 4).map(roleRow).concat(nl.slice(0, 5).map(leadRow))) + foot + "</section>";
   }
 
   function pipeline(d) {
@@ -118,10 +129,8 @@
 
   function render(d, ctx) {
     ctx = ctx || {};
-    const left = todo(d, ctx) + fresh(d, ctx);
-    const right = outreach(d) + pipeline(d);
     return ctx.wide
-      ? '<div class="hm hm-wide"><div class="hm-col">' + left + '</div><div class="hm-col">' + right + "</div></div>"
+      ? '<div class="hm"><div class="hm-wide"><div class="hm-col">' + todo(d, ctx) + '</div><div class="hm-col">' + outreach(d) + pipeline(d) + "</div></div>" + fresh(d, ctx) + "</div>"
       : '<div class="hm">' + todo(d, ctx) + outreach(d) + fresh(d, ctx) + pipeline(d) + "</div>";
   }
 
