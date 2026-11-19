@@ -263,4 +263,72 @@ async function markChecked(pool, id) {
   return loadContact(pool, String(id));
 }
 
-module.exports = { markChecked, ensureSchema, createKey, listKeys, revokeKey, keyAuth, lookup, searchLeads, addContact, logActivity, addNote, profileSlug };
+// The extension's Home screen: what needs doing today, what's new, how outreach is going (whole
+// team) and where the pipeline stands. One round of read-only queries.
+async function home(pool) {
+  const q = (sql, params) => pool.query(sql, params).then((r) => r.rows);
+  const OPEN = "l.status not in ('Lost','Not a Fit')";
+  const [meta, follow, drafts, checks, newLeads, newRoles, dials, rate, pipe, jds, cands, totals] = await Promise.all([
+    q("select last_scanned from meta where id = 1"),
+    q(`select c.id, c.name, c.title, c.linkedin, c.stage, c.next_follow_up, c.sequence_step, l.id lead_id, l.company, l.in_crm,
+              (current_date - c.next_follow_up) as days_over
+         from contacts c join leads l on l.id = c.lead_id
+        where ${OPEN} and c.next_follow_up is not null and c.next_follow_up <= current_date and c.stage <> 'Not interested'
+        order by c.next_follow_up, l.in_crm desc, c.name`),
+    q(`select d.contact_id, d.touch, d.kind, c.name, c.linkedin, l.id lead_id, l.company, l.in_crm
+         from agent_drafts d join leads l on l.id = d.lead_id left join contacts c on c.id = d.contact_id
+        where d.used_at is null and d.dismissed_at is null and d.kind <> 'contact' and d.created_at > now() - interval '21 days'
+          and ${OPEN} and (c.id is null or c.stage not in ('Not interested','No response'))
+        order by l.in_crm desc, d.created_at desc`),
+    q(`select c.id, c.name, c.title, c.linkedin, l.id lead_id, l.company, l.in_crm
+         from contacts c join leads l on l.id = c.lead_id
+        where ${OPEN} and c.agent_found order by l.in_crm desc, l.date_added desc, c.sort_order`),
+    q(`select id, company, job_title, priority, date_added, in_crm from leads
+        where date_added > current_date - 7 order by date_added desc, (priority = 'High') desc, company`),
+    q(`select a.lead_id, l.company, a.job_title, a.job_url, a.found_at from role_alerts a join leads l on l.id = a.lead_id
+        where a.seen_at is null and ${OPEN} order by a.found_at desc`),
+    q(`select case when activity_date > current_date - 7 then 'this' else 'last' end as wk,
+              count(*) filter (where type = 'LinkedIn connection' and direction = 'Outbound') connections,
+              count(*) filter (where type in ('LinkedIn message','Email','Call') and direction = 'Outbound') messages,
+              count(*) filter (where direction = 'Inbound' and type <> 'Note') replies,
+              count(*) filter (where type = 'Meeting' or (type = 'Note' and summary like '%→ Meeting booked%')) meetings
+         from activities where activity_date > current_date - 14 group by 1`),
+    q(`select count(distinct contact_id) filter (where direction = 'Outbound' and type <> 'Note') contacted,
+              count(distinct contact_id) filter (where direction = 'Inbound' and type <> 'Note') replied
+         from activities where activity_date > current_date - 30`),
+    q(`select status, count(*)::int n from leads l where in_crm group by status`),
+    q(`select status, count(*)::int n from job_descriptions group by status`).catch(() => []),
+    q(`select stage, count(*)::int n from candidates group by stage`),
+    q(`select count(*)::int leads, count(*) filter (where in_crm)::int crm from leads`),
+  ]);
+  const person = (r) => ({ contactId: r.id || r.contact_id || "", name: r.name || "", title: r.title || "", linkedin: r.linkedin || "", leadId: r.lead_id, company: r.company, inCrm: !!r.in_crm });
+  const wk = (k) => { const r = dials.find((x) => x.wk === k) || {}; return { connections: +r.connections || 0, messages: +r.messages || 0, replies: +r.replies || 0, meetings: +r.meetings || 0 }; };
+  const STAGES = ["Not Started", "Researching", "Contacted", "Replied", "Meeting Booked", "Proposal Sent", "Won"];
+  const count = (rows, key, v) => (rows.find((x) => x[key] === v) || {}).n || 0;
+  const r0 = rate[0] || {};
+  const draftsByContact = {};
+  drafts.forEach((d) => { const k = d.contact_id || d.lead_id; if (!draftsByContact[k]) draftsByContact[k] = Object.assign(person(d), { touch: d.touch, kind: d.kind }); });
+  return {
+    today: dstr(new Date()),
+    lastScanned: dstr(meta[0] && meta[0].last_scanned),
+    todo: {
+      followUps: follow.map((r) => Object.assign(person(r), { stage: r.stage, due: dstr(r.next_follow_up), daysOver: +r.days_over || 0, touch: Math.min(5, (r.sequence_step || 0) + 1) })),
+      drafts: { count: drafts.length, people: Object.values(draftsByContact) },
+      titleChecks: checks.map(person),
+    },
+    fresh: {
+      newLeads: newLeads.map((l) => ({ id: l.id, company: l.company, jobTitle: l.job_title, priority: l.priority, dateAdded: dstr(l.date_added), inCrm: l.in_crm })),
+      newRoles: newRoles.map((a) => ({ leadId: a.lead_id, company: a.company, jobTitle: a.job_title, url: a.job_url, found: dstr(a.found_at) })),
+    },
+    dials: { thisWeek: wk("this"), lastWeek: wk("last"), replyRate: { contacted: +r0.contacted || 0, replied: +r0.replied || 0 } },
+    pipeline: {
+      stages: STAGES.map((s) => ({ status: s, count: count(pipe, "status", s) })),
+      closed: count(pipe, "status", "Lost") + count(pipe, "status", "Not a Fit"),
+      jds: { ready: count(jds, "status", "ready"), waiting: count(jds, "status", "waiting") },
+      candidates: { inProgress: cands.filter((c) => !["Placed", "Not Placed"].includes(c.stage)).reduce((a, c) => a + c.n, 0), placed: count(cands, "stage", "Placed") },
+      totals: totals[0] || { leads: 0, crm: 0 },
+    },
+  };
+}
+
+module.exports = { home, markChecked, ensureSchema, createKey, listKeys, revokeKey, keyAuth, lookup, searchLeads, addContact, logActivity, addNote, profileSlug };

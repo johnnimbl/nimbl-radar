@@ -148,6 +148,7 @@ const wrap = (fn) => async (req, res) => {
 };
 extApi.get("/ping", wrap(async (req) => ({ ok: true, user: req.extUser })));
 extApi.get("/lookup", wrap((req) => ext.lookup(as(req), req.query)));
+extApi.get("/home", wrap(() => ext.home(pool)));
 extApi.get("/leads", wrap(async (req) => ({ items: await ext.searchLeads(pool, req.query.q) })));
 extApi.post("/contacts", wrap((req) => ext.addContact(as(req), req.body || {})));
 extApi.post("/contacts/:id/checked", wrap((req) => ext.markChecked(as(req), req.params.id)));

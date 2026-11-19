@@ -7,6 +7,7 @@
   window.__nimblRadar = true;
 
   const CONN_LIMIT = 200;
+  const HOME_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 7.2 8 2l6 5.2V14H9.7v-4H6.3v4H2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
   const TOUCH_LABEL = { 1: "Connection note", 2: "First message", 3: "Follow-up", 4: "Value add", 5: "Last note" };
 
   // ---------- shadow-root panel ----------
@@ -16,9 +17,12 @@
   const css = document.createElement("link");
   css.rel = "stylesheet";
   css.href = chrome.runtime.getURL("panel.css");
+  const css2 = document.createElement("link");
+  css2.rel = "stylesheet";
+  css2.href = chrome.runtime.getURL("home.css");
   const wrap = document.createElement("div");
   wrap.className = "rp";
-  root.append(css, wrap);
+  root.append(css, css2, wrap);
   (document.body || document.documentElement).appendChild(host);
 
   const S = {
@@ -30,6 +34,9 @@
     edits: {},             // draft id -> edited text
     lastInserted: null,    // {contactId, text, touch}
     replyOpen: false, replyText: "", flash: null, busy: false,
+    view: "person",        // "person" (the profile or conversation) or "home" (the dashboard)
+    otherOpen: false,      // panel open on other LinkedIn pages (feed, search…): closed until you open it
+    home: null, homeLoading: false, homeError: "", homeAt: 0,
   };
   chrome.storage.local.get({ panelOpen: true, panelWide: false }).then((v) => { S.open = v.panelOpen; S.wide = v.panelWide; render(); });
 
@@ -46,7 +53,7 @@
     const p = location.pathname;
     if (/^\/in\/[^/]+/.test(p)) return { type: "profile", slug: slugOf(p) };
     if (/^\/messaging\/thread\//.test(p)) return { type: "messaging", key: p };
-    return null;
+    return { type: "other", key: "other" };
   }
 
   // LinkedIn's profile markup changes often (2026: obfuscated class names, the name in an <h2>), so
@@ -182,6 +189,8 @@
     S.contact = null; S.companies = []; S.chosenLead = null; S.searchResults = null; S.search = ""; S.replyOpen = false;
     S.error = ""; S.needsKey = false; S.flash = null; S.person = null;
     if (!pg) { render(); return; }
+    if (pg.type === "other") { S.view = "home"; render(); if (S.otherOpen) loadHome(); return; }
+    S.view = "person";
     S.loading = true; render();
     // LinkedIn renders profiles after load; give it a few seconds.
     let person = null;
@@ -204,6 +213,18 @@
     render();
   }
 
+  // Home dashboard data (cached for a minute; ↻ reloads it).
+  async function loadHome(force) {
+    if (S.homeLoading || (!force && S.home && Date.now() - S.homeAt < 60000)) { render(); return; }
+    S.homeLoading = true; S.homeError = ""; render();
+    const r = await api("GET", "/home");
+    S.homeLoading = false;
+    if (r && r.ok) { S.home = r.data; S.homeAt = Date.now(); S.radarUrl = r.radarUrl; }
+    else { S.homeError = (r && r.error) || "Couldn't reach Radar."; S.needsKey = !!(r && r.needsKey); }
+    render();
+  }
+  function isOpen() { return S.page && S.page.type === "other" ? S.otherOpen : S.open; }
+
   async function doSearch() {
     const r = await api("GET", "/leads?q=" + encodeURIComponent(S.search));
     if (r && r.ok) { S.searchResults = r.data.items; S.radarUrl = r.radarUrl; render(); }
@@ -224,13 +245,21 @@
     const pg = S.page;
     host.style.display = pg ? "" : "none";
     if (!pg) { wrap.innerHTML = ""; return; }
-    if (!S.open) {
+    if (!isOpen()) {
       wrap.innerHTML = '<button type="button" class="tab" data-act="open" aria-label="Open the Nimbl Radar panel">' +
         (S.contact ? '<span class="dot" aria-hidden="true"></span>' : "") + "Radar</button>";
       return;
     }
+    const onPerson = pg.type !== "other";
+    const homeView = S.view === "home";
     let body = "";
-    if (S.loading) body = '<p class="muted">Looking this person up in Radar…</p>';
+    if (homeView) {
+      if (S.needsKey) body = '<p>Connect the extension to Radar first.</p><div class="row"><button type="button" class="btn btn-primary" data-act="options">Open settings</button></div>';
+      else if (S.homeError) body = '<div class="msg err">' + esc(S.homeError) + '</div><div class="row"><button type="button" class="btn" data-act="retry">Try again</button></div>';
+      else if (!S.home) body = '<p class="muted">Loading your Radar numbers…</p>';
+      else body = window.RadarHome.render(S.home, { radarUrl: S.radarUrl, wide: S.wide });
+      if (onPerson && S.person) body = '<div class="row"><button type="button" class="btn" data-act="home">← Back to ' + esc(String(S.person.name || "this person").split(" ")[0]) + "</button></div>" + body;
+    } else if (S.loading) body = '<p class="muted">Looking this person up in Radar…</p>';
     else if (S.needsKey) body = '<p>Connect the extension to Radar first.</p><div class="row"><button type="button" class="btn btn-primary" data-act="options">Open settings</button></div>';
     else if (S.error) body = '<div class="msg err">' + esc(S.error) + '</div><div class="row"><button type="button" class="btn" data-act="retry">Try again</button></div>';
     else if (!S.person) body = pg.type === "messaging" ? '<p class="muted">Open a conversation to see that person in Radar.</p>' : '<p class="muted">Couldn\'t read this profile.</p><div class="row"><button type="button" class="btn" data-act="retry">Try again</button></div>';
@@ -239,8 +268,9 @@
     if (S.flash) body = '<div class="msg ' + (S.flash.ok ? "ok" : "err") + '" role="status">' + esc(S.flash.text) + "</div>" + body;
     wrap.innerHTML =
       '<section class="panel' + (S.wide ? " wide" : "") + '" aria-label="Nimbl Radar">' +
-        '<div class="head"><img src="' + chrome.runtime.getURL("icons/icon32.png") + '" alt=""><strong>Nimbl Radar</strong>' +
-          '<button type="button" class="icon-btn" data-act="wide" title="' + (S.wide ? "Show less" : "Show the full client card") + '" aria-label="' + (S.wide ? "Show less" : "Show the full client card") + '" aria-pressed="' + !!S.wide + '">' + (S.wide ? "⇥" : "⇤") + "</button>" +
+        '<div class="head"><img src="' + chrome.runtime.getURL("icons/icon32.png") + '" alt=""><strong>' + (homeView ? "Radar home" : "Nimbl Radar") + "</strong>" +
+          (onPerson ? '<button type="button" class="icon-btn home-btn" data-act="home" title="' + (homeView ? "Back to this person" : "Home: today, new leads and team stats") + '" aria-label="Home" aria-pressed="' + homeView + '">' + HOME_ICON + "</button>" : "") +
+          '<button type="button" class="icon-btn" data-act="wide" title="' + (S.wide ? "Show less" : (homeView ? "Wider dashboard" : "Show the full client card")) + '" aria-label="' + (S.wide ? "Show less" : "Show more") + '" aria-pressed="' + !!S.wide + '">' + (S.wide ? "⇥" : "⇤") + "</button>" +
           '<button type="button" class="icon-btn" data-act="retry" title="Refresh" aria-label="Refresh">↻</button>' +
           '<button type="button" class="icon-btn" data-act="close" title="Hide panel" aria-label="Hide panel">–</button></div>' +
         '<div class="body">' + body + "</div>" +
@@ -401,9 +431,11 @@
     if (!b) return;
     const act = b.getAttribute("data-act");
     const id = b.getAttribute("data-id");
-    if (act === "close") { S.open = false; chrome.storage.local.set({ panelOpen: false }); render(); return; }
-    if (act === "open") { S.open = true; chrome.storage.local.set({ panelOpen: true }); render(); return; }
-    if (act === "retry") { refresh(); return; }
+    const other = S.page && S.page.type === "other";
+    if (act === "close") { if (other) S.otherOpen = false; else { S.open = false; chrome.storage.local.set({ panelOpen: false }); } render(); return; }
+    if (act === "open") { if (other) { S.otherOpen = true; loadHome(); } else { S.open = true; chrome.storage.local.set({ panelOpen: true }); render(); } return; }
+    if (act === "home") { S.view = S.view === "home" ? "person" : "home"; if (S.view === "home") loadHome(); else render(); return; }
+    if (act === "retry") { if (S.view === "home") loadHome(true); else refresh(); return; }
     if (act === "wide") { S.wide = !S.wide; chrome.storage.local.set({ panelWide: S.wide }); render(); return; }
     if (act === "jd-download") {
       b.disabled = true;

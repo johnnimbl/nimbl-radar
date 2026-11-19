@@ -1,0 +1,130 @@
+// Nimbl Radar extension: the Home screen, shared by the LinkedIn panel (content.js) and the toolbar
+// popup (popup.js). Pure rendering: takes the /api/ext/home data and returns HTML.
+// Numbers cover the whole team. Styles live in home.css.
+(() => {
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const TOUCH = { 1: "Connection note", 2: "First message", 3: "Follow-up", 4: "Value add", 5: "Last note" };
+  const first = (n) => String(n || "").split(" ")[0];
+  const fmtDay = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso + "T12:00:00");
+    return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  };
+
+  // ctx: { radarUrl, popup }  popup = true opens every link in a new tab.
+  function links(ctx) {
+    const radar = (p) => (ctx.radarUrl || "") + "/" + (p.inCrm ? "#crm/" + encodeURIComponent(p.leadId) : "");
+    const person = (p, label) => {
+      const href = p.linkedin || radar(p);
+      const sameTab = !ctx.popup && !!p.linkedin; // on LinkedIn, open the profile right here
+      return '<a href="' + esc(href) + '"' + (sameTab ? "" : ' target="_blank" rel="noopener"') + ">" + label + "</a>";
+    };
+    const company = (p) => '<a href="' + esc(radar(p)) + '" target="_blank" rel="noopener">' + esc(p.company) + "</a>";
+    return { radar, person, company };
+  }
+
+  function todo(d, ctx) {
+    const L = links(ctx);
+    const t = d.todo;
+    const fu = t.followUps;
+    const over = fu.filter((f) => f.daysOver > 0).length;
+    const tiles =
+      '<div class="hm-tiles">' +
+        tile(fu.length, "Follow-ups due", over ? over + " overdue" : "", fu.length ? "hot" : "") +
+        tile(t.drafts.count, "Drafts ready", t.drafts.people.length ? t.drafts.people.length + " people" : "", "") +
+        tile(t.titleChecks.length, "Titles to check", "found by the scan", "") +
+      "</div>";
+    const rows = [];
+    fu.slice(0, 6).forEach((f) => rows.push(
+      '<li><span class="hm-due' + (f.daysOver > 0 ? " over" : "") + '">' + (f.daysOver > 0 ? f.daysOver + "d late" : "Today") + "</span>" +
+      '<span class="hm-main"><span>' + L.person(f, esc(f.name)) + ' <span class="hm-sub">· ' + esc(f.company) + "</span></span>" +
+      '<span class="hm-why">' + esc(TOUCH[f.touch] || "Follow-up") + " · " + esc(f.stage) + "</span></span></li>"));
+    t.drafts.people.slice(0, Math.max(0, 8 - rows.length)).forEach((p) => rows.push(
+      '<li><span class="hm-due draft">Draft</span><span class="hm-main"><span>' + (p.contactId ? L.person(p, esc(p.name)) : L.company(p)) +
+      (p.contactId ? ' <span class="hm-sub">· ' + esc(p.company) + "</span>" : "") + "</span>" +
+      '<span class="hm-why">' + (p.kind === "reengage" ? "New role message" : esc(TOUCH[p.touch] || "Message")) + " ready to send</span></span></li>"));
+    t.titleChecks.slice(0, 4).forEach((p) => rows.push(
+      '<li><span class="hm-due check">Check</span><span class="hm-main"><span>' + L.person(p, esc(p.name)) + ' <span class="hm-sub">· ' + esc(p.company) + "</span></span>" +
+      '<span class="hm-why">' + esc(p.title || "No title saved") + "</span></span></li>"));
+    const more = fu.length + t.drafts.people.length + t.titleChecks.length - rows.length;
+    return '<section class="hm-sec" aria-label="Today"><h3>Today</h3>' + tiles +
+      (rows.length ? '<ul class="hm-list">' + rows.join("") + "</ul>" : '<p class="hm-empty">Nothing due. Nice.</p>') +
+      (more > 0 ? '<a class="hm-more" href="' + esc((ctx.radarUrl || "") + "/#pipeline") + '" target="_blank" rel="noopener">' + more + " more in Radar ↗</a>" : "") +
+      "</section>";
+  }
+
+  function tile(n, label, sub, cls) {
+    return '<div class="hm-tile ' + (cls || "") + '"><div class="hm-num">' + n + '</div><div class="hm-lbl">' + esc(label) + "</div>" +
+      (sub ? '<div class="hm-tsub">' + esc(sub) + "</div>" : "") + "</div>";
+  }
+
+  function delta(now, before) {
+    const diff = now - before;
+    if (!diff) return '<span class="hm-delta">same as the week before</span>';
+    return '<span class="hm-delta ' + (diff > 0 ? "up" : "down") + '">' + (diff > 0 ? "▲ " : "▼ ") + Math.abs(diff) + " vs week before</span>";
+  }
+
+  function gauge(pct, label) {
+    const len = Math.PI * 40;
+    const fill = Math.max(0, Math.min(1, pct)) * len;
+    return '<svg class="hm-gauge" viewBox="0 0 100 58" role="img" aria-label="' + esc(label) + '">' +
+      '<path d="M10 50 A40 40 0 0 1 90 50" class="trk"/>' +
+      (fill > 0 ? '<path d="M10 50 A40 40 0 0 1 90 50" class="val" stroke-dasharray="' + fill.toFixed(1) + " " + len.toFixed(1) + '"/>' : "") +
+      '<text x="50" y="48" text-anchor="middle">' + Math.round(pct * 100) + "%</text></svg>";
+  }
+
+  function outreach(d) {
+    const a = d.dials.thisWeek, b = d.dials.lastWeek, r = d.dials.replyRate;
+    const pct = r.contacted ? r.replied / r.contacted : 0;
+    const dial = (k, label) => '<div class="hm-dial"><div class="hm-num">' + a[k] + '</div><div class="hm-lbl">' + label + "</div>" + delta(a[k], b[k]) + "</div>";
+    return '<section class="hm-sec" aria-label="Outreach"><h3>Outreach · last 7 days <span class="hm-team">whole team</span></h3>' +
+      '<div class="hm-dials">' + dial("connections", "Connection requests") + dial("messages", "Messages and emails") +
+        dial("replies", "Replies") + dial("meetings", "Meetings") + "</div>" +
+      '<div class="hm-rate">' + gauge(pct, "Reply rate " + Math.round(pct * 100) + "%") +
+        '<div><div class="hm-lbl">Reply rate, last 30 days</div><div class="hm-sub">' + r.replied + " of " + r.contacted +
+        (r.contacted === 1 ? " person" : " people") + " the team reached out to replied</div></div></div></section>";
+  }
+
+  function fresh(d, ctx) {
+    const L = links(ctx);
+    const nl = d.fresh.newLeads, nr = d.fresh.newRoles;
+    let h = '<section class="hm-sec" aria-label="New"><h3>New this week</h3>' +
+      '<div class="hm-tiles two">' + tile(nl.length, "New companies", "last 7 days", "") + tile(nr.length, "New roles", "at your CRM companies", nr.length ? "hot" : "") + "</div>";
+    const rows = [];
+    nr.slice(0, 4).forEach((a) => rows.push('<li><span class="hm-due role">Role</span><span class="hm-main">' +
+      (a.url ? '<a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.jobTitle) + "</a>" : esc(a.jobTitle)) +
+      '<span class="hm-why">' + esc(a.company) + " · found " + esc(fmtDay(a.found)) + "</span></span></li>"));
+    nl.slice(0, 5).forEach((l) => rows.push('<li><span class="hm-due' + (l.priority === "High" ? " high" : "") + '">' + esc(l.priority) + "</span>" +
+      '<span class="hm-main">' + L.company({ leadId: l.id, company: l.company, inCrm: l.inCrm }) +
+      '<span class="hm-why">' + esc(l.jobTitle) + " · added " + esc(fmtDay(l.dateAdded)) + "</span></span></li>"));
+    if (rows.length) h += '<ul class="hm-list">' + rows.join("") + "</ul>";
+    h += '<p class="hm-foot">Last morning scan: ' + (d.lastScanned ? esc(fmtDay(d.lastScanned)) : "not yet") + "</p></section>";
+    return h;
+  }
+
+  function pipeline(d) {
+    const p = d.pipeline;
+    const max = Math.max(1, ...p.stages.map((s) => s.count));
+    const bars = p.stages.map((s) =>
+      '<li><span class="hm-blbl">' + esc(s.status) + '</span><span class="hm-bar"><span style="width:' + (s.count ? Math.max(4, (s.count / max) * 100) : 0) + '%"></span></span>' +
+      '<span class="hm-bnum">' + s.count + "</span></li>").join("");
+    return '<section class="hm-sec" aria-label="Pipeline"><h3>CRM companies by status</h3><ul class="hm-bars">' + bars + "</ul>" +
+      '<div class="hm-facts">' +
+        "<span><b>" + p.jds.ready + "</b> job description" + (p.jds.ready === 1 ? "" : "s") + " ready" + (p.jds.waiting ? " · " + p.jds.waiting + " waiting" : "") + "</span>" +
+        "<span><b>" + p.candidates.inProgress + "</b> candidate" + (p.candidates.inProgress === 1 ? "" : "s") + " in progress · " + p.candidates.placed + " placed</span>" +
+        "<span><b>" + p.totals.crm + "</b> compan" + (p.totals.crm === 1 ? "y" : "ies") + " in the CRM · " + p.totals.leads + " leads in Radar" + (p.closed ? " · " + p.closed + " closed" : "") + "</span>" +
+      "</div></section>";
+  }
+
+  function render(d, ctx) {
+    ctx = ctx || {};
+    const left = todo(d, ctx) + fresh(d, ctx);
+    const right = outreach(d) + pipeline(d);
+    return ctx.wide
+      ? '<div class="hm hm-wide"><div class="hm-col">' + left + '</div><div class="hm-col">' + right + "</div></div>"
+      : '<div class="hm">' + todo(d, ctx) + outreach(d) + fresh(d, ctx) + pipeline(d) + "</div>";
+  }
+
+  const api = { render, first };
+  if (typeof window !== "undefined") window.RadarHome = api;
+})();
