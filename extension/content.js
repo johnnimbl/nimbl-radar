@@ -211,6 +211,7 @@
     S.companies = r.data.companies || [];
     if (!S.contact && S.companies.length === 1) S.chosenLead = S.companies[0];
     render();
+    loadHome(); // keeps the Home count in the switch current (cached for a minute)
   }
 
   // Home dashboard data (cached for a minute; ↻ reloads it).
@@ -258,7 +259,6 @@
       else if (S.homeError) body = '<div class="msg err">' + esc(S.homeError) + '</div><div class="row"><button type="button" class="btn" data-act="retry">Try again</button></div>';
       else if (!S.home) body = '<p class="muted">Loading your Radar numbers…</p>';
       else body = window.RadarHome.render(S.home, { radarUrl: S.radarUrl, wide: S.wide });
-      if (onPerson && S.person) body = '<div class="row"><button type="button" class="btn" data-act="home">← Back to ' + esc(String(S.person.name || "this person").split(" ")[0]) + "</button></div>" + body;
     } else if (S.loading) body = '<p class="muted">Looking this person up in Radar…</p>';
     else if (S.needsKey) body = '<p>Connect the extension to Radar first.</p><div class="row"><button type="button" class="btn btn-primary" data-act="options">Open settings</button></div>';
     else if (S.error) body = '<div class="msg err">' + esc(S.error) + '</div><div class="row"><button type="button" class="btn" data-act="retry">Try again</button></div>';
@@ -268,13 +268,24 @@
     if (S.flash) body = '<div class="msg ' + (S.flash.ok ? "ok" : "err") + '" role="status">' + esc(S.flash.text) + "</div>" + body;
     wrap.innerHTML =
       '<section class="panel' + (S.wide ? " wide" : "") + '" aria-label="Nimbl Radar">' +
-        '<div class="head"><img src="' + chrome.runtime.getURL("icons/icon32.png") + '" alt=""><strong>' + (homeView ? "Radar home" : "Nimbl Radar") + "</strong>" +
-          (onPerson ? '<button type="button" class="icon-btn home-btn" data-act="home" title="' + (homeView ? "Back to this person" : "Home: today, new leads and team stats") + '" aria-label="Home" aria-pressed="' + homeView + '">' + HOME_ICON + "</button>" : "") +
+        '<div class="top"><div class="head"><img src="' + chrome.runtime.getURL("icons/icon32.png") + '" alt=""><strong>Nimbl Radar</strong>' +
           '<button type="button" class="icon-btn" data-act="wide" title="' + (S.wide ? "Show less" : (homeView ? "Wider dashboard" : "Show the full client card")) + '" aria-label="' + (S.wide ? "Show less" : "Show more") + '" aria-pressed="' + !!S.wide + '">' + (S.wide ? "⇥" : "⇤") + "</button>" +
           '<button type="button" class="icon-btn" data-act="retry" title="Refresh" aria-label="Refresh">↻</button>' +
           '<button type="button" class="icon-btn" data-act="close" title="Hide panel" aria-label="Hide panel">–</button></div>' +
+          renderSwitch(onPerson, homeView) + "</div>" +
         '<div class="body">' + body + "</div>" +
       "</section>";
+  }
+
+  // Two-part switch under the header: [ person ] [ Home · follow-ups due ]. Always visible (sticky).
+  function renderSwitch(onPerson, homeView) {
+    const due = S.home ? S.home.todo.followUps.length : 0;
+    const name = (S.contact && S.contact.name) || (S.person && S.person.name) || "";
+    const who = name ? String(name).split(" ")[0] : (S.page && S.page.type === "messaging" ? "Conversation" : "Profile");
+    const tab = (view, label, sel) => '<button type="button" role="tab" data-act="view" data-view="' + view + '" aria-selected="' + sel + '">' + label + "</button>";
+    const home = HOME_ICON + "<span>Home</span>" + (due ? '<span class="sw-count" title="Follow-ups due">' + due + "</span>" : "");
+    return '<div class="switch" role="tablist" aria-label="Panel view">' +
+      (onPerson ? tab("person", '<span class="who">' + esc(who) + "</span>", !homeView) : "") + tab("home", home, homeView) + "</div>";
   }
 
   function renderContact(c) {
@@ -434,7 +445,7 @@
     const other = S.page && S.page.type === "other";
     if (act === "close") { if (other) S.otherOpen = false; else { S.open = false; chrome.storage.local.set({ panelOpen: false }); } render(); return; }
     if (act === "open") { if (other) { S.otherOpen = true; loadHome(); } else { S.open = true; chrome.storage.local.set({ panelOpen: true }); render(); } return; }
-    if (act === "home") { S.view = S.view === "home" ? "person" : "home"; if (S.view === "home") loadHome(); else render(); return; }
+    if (act === "view") { const v = b.getAttribute("data-view"); if (v === S.view) return; S.view = v; if (v === "home") loadHome(); else render(); return; }
     if (act === "retry") { if (S.view === "home") loadHome(true); else refresh(); return; }
     if (act === "wide") { S.wide = !S.wide; chrome.storage.local.set({ panelWide: S.wide }); render(); return; }
     if (act === "jd-download") {

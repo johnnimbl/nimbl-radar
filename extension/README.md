@@ -18,7 +18,7 @@ It only reads the page you have open and fills in text: you always press Send on
   For a message, open the message box first. The text is also copied to your clipboard.
 - **Log what you did:** after pressing Send, click **I sent the connection request** / **I sent a message**.
   When they answer, open the conversation and click **They replied…** (it picks up their last message).
-- **Home:** the house button in the panel (and the toolbar button, on any site) shows today's follow-ups,
+- **Home:** the switch at the top of the panel flips between the person and Home (the number is follow-ups due); the toolbar button shows Home on any site. Home shows today's follow-ups,
   drafts ready to send, titles to check, new companies and roles this week, the team's outreach for the last
   7 days with the reply rate, and the CRM pipeline. On other LinkedIn pages the panel starts as a small tab;
   open it to see Home.
