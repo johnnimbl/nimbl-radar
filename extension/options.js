@@ -16,8 +16,8 @@ async function refresh() {
     return;
   }
   const u = r.data;
-  const photo = await chrome.runtime.sendMessage({ type: "photo", email: u.email });
-  $("who").innerHTML = (photo ? '<img src="' + esc(photo) + '" alt="">' : '<span class="ini">' + esc(initials(u.name)) + "</span>") +
+  const photo = /^(https:|data:image\/)/.test(u.photo || "") ? u.photo : "";
+  $("who").innerHTML = (photo ? '<img src="' + esc(photo) + '" alt="" referrerpolicy="no-referrer">' : '<span class="ini">' + esc(initials(u.name)) + "</span>") +
     "<div><strong>" + esc(u.name) + '</strong><span class="help">Signed in as ' + esc(u.email) + "</span></div>";
   $("signedOut").hidden = true; $("signedIn").hidden = false;
 }

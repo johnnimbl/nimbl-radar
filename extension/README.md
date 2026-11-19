@@ -21,7 +21,7 @@ It only reads the page you have open and fills in text: you always press Send on
   When they answer, open the conversation and click **They replied…** (it picks up their last message).
 - **Your profile:** click your initials at the top of the panel or popup: your numbers this month vs last
   month, the browsers connected to your account (disconnect any you no longer use) and **Sign out**.
-- **Home:** the switch at the top of the panel flips between the person and Home (the number is follow-ups due); the toolbar button shows Home on any site. **Team / Me** at the top switches between everyone's numbers and yours. Home shows today's follow-ups,
+- **Home:** the switch at the top of the panel flips between the person and Home (the number is follow-ups due); the toolbar button shows Home on any site. Home shows today's follow-ups,
   drafts ready to send, titles to check, new companies and roles this week, the team's outreach for the last
   7 days with the reply rate, and the CRM pipeline. On other LinkedIn pages the panel starts as a small tab;
   open it to see Home.

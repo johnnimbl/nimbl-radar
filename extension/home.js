@@ -129,21 +129,11 @@
       "</div></section>";
   }
 
-  // Me / Team switch at the top of Home. "Me" covers follow-ups and outreach you logged yourself.
-  function scopeSwitch(d) {
-    const mine = d.scope === "me";
-    const b = (v, label) => '<button type="button" role="tab" data-act="scope" data-scope="' + v + '" aria-selected="' + ((v === "me") === mine) + '">' + label + "</button>";
-    return '<div class="hm-scope"><div class="hm-seg" role="tablist" aria-label="Whose numbers">' + b("team", "Team") + b("me", "Me") + "</div>" +
-      '<span class="hm-sub">' + (mine
-        ? "Your follow-ups and outreach" + (d.trackedSince ? ", from what you've logged since " + esc(fmtDay(d.trackedSince)) : "")
-        : "Everyone's follow-ups and outreach") + "</span></div>";
-  }
-
   function render(d, ctx) {
     ctx = ctx || {};
     return ctx.wide
-      ? '<div class="hm">' + scopeSwitch(d) + '<div class="hm-wide"><div class="hm-col">' + todo(d, ctx) + '</div><div class="hm-col">' + outreach(d) + pipeline(d) + "</div></div>" + fresh(d, ctx) + "</div>"
-      : '<div class="hm">' + scopeSwitch(d) + todo(d, ctx) + outreach(d) + fresh(d, ctx) + pipeline(d) + "</div>";
+      ? '<div class="hm"><div class="hm-wide"><div class="hm-col">' + todo(d, ctx) + '</div><div class="hm-col">' + outreach(d) + pipeline(d) + "</div></div>" + fresh(d, ctx) + "</div>"
+      : '<div class="hm">' + todo(d, ctx) + outreach(d) + fresh(d, ctx) + pipeline(d) + "</div>";
   }
 
   const initials = (n) => String(n || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
@@ -153,8 +143,9 @@
   function avatar(u, ctx, size) {
     const st = size ? ' style="width:' + size + "px;height:" + size + 'px"' : "";
     const ini = esc(initials(u.name || u.email));
-    return ctx && ctx.photoUrl
-      ? '<img class="me-av" src="' + esc(ctx.photoUrl) + '" alt="" data-ini="' + ini + '"' + st + ">"
+    const src = (ctx && ctx.photoUrl) || u.photo || "";
+    return /^(https:|data:image\/)/.test(src)
+      ? '<img class="me-av" src="' + esc(src) + '" alt="" data-ini="' + ini + '"' + st + ' referrerpolicy="no-referrer">'
       : '<span class="me-av me-ini"' + st + ">" + ini + "</span>";
   }
   // Swap any photo that fails to load (e.g. blocked by the page) for initials.

@@ -80,29 +80,7 @@ chrome.runtime.onMessageExternal.addListener((msg, sender, reply) => {
   return true;
 });
 
-// The signed-in person's Google photo as a data: URL (cached for a day per account), or "".
-async function photo(email) {
-  const c = (await chrome.storage.local.get({ photo: null })).photo;
-  if (c && c.email === email && Date.now() - c.at < 86400000) return c.data;
-  const s = await settings();
-  if (!s.key) return "";
-  let data = "";
-  try {
-    const res = await fetch(s.radarUrl + "/api/ext/photo", { headers: { Authorization: "Bearer " + s.key } });
-    const type = res.headers.get("content-type") || "";
-    if (res.ok && /^image\//.test(type)) {
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      let bin = "";
-      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-      data = "data:" + type.split(";")[0] + ";base64," + btoa(bin);
-    }
-  } catch (e) { /* offline: initials */ }
-  await chrome.storage.local.set({ photo: { email, data, at: Date.now() } });
-  return data;
-}
-
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-  if (msg && msg.type === "photo") { photo(String(msg.email || "")).then(reply); return true; }
   if (msg && msg.type === "signIn") { startSignIn().then(reply); return true; }
   if (msg && msg.type === "signOut") { signOut().then(reply); return true; }
   if (msg && msg.type === "api") { api(msg.method || "GET", msg.path, msg.body).then(reply); return true; }

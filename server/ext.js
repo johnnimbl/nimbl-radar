@@ -282,7 +282,7 @@ async function home(pool, opts = {}) {
     q(`select d.contact_id, d.touch, d.kind, c.name, c.linkedin, l.id lead_id, l.company, l.in_crm
          from agent_drafts d join leads l on l.id = d.lead_id left join contacts c on c.id = d.contact_id
         where d.used_at is null and d.dismissed_at is null and d.kind <> 'contact' and d.created_at > now() - interval '21 days'
-          and ${OPEN} and (c.id is null or c.stage not in ('Not interested','No response'))
+          and ${OPEN} and (coalesce(d.contact_id, '') = '' or (c.id is not null and c.stage not in ('Not interested','No response')))
         order by l.in_crm desc, d.created_at desc`),
     q(`select c.id, c.name, c.title, c.linkedin, l.id lead_id, l.company, l.in_crm
          from contacts c join leads l on l.id = c.lead_id
