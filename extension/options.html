@@ -5,12 +5,39 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nimbl Radar settings</title>
 <link rel="stylesheet" href="ui.css">
+<style>
+.who { display: flex; align-items: center; gap: 12px; }
+.who img, .who .ini { width: 44px; height: 44px; border-radius: 50%; flex: 0 0 auto; }
+.who .ini { display: grid; place-items: center; background: var(--yellow); border: 1px solid var(--ink); font-weight: 800; }
+.who strong { display: block; font-size: 15px; }
+details summary { cursor: pointer; font-weight: 700; font-size: 13px; color: var(--ink-soft); }
+details[open] summary { margin-bottom: 10px; }
+.chip { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; border: 1px solid var(--teal); color: var(--teal); border-radius: 999px; padding: 2px 8px; margin-left: 6px; }
+[hidden] { display: none !important; }
+</style>
 </head>
 <body>
 <main class="wrap">
   <div class="brand"><img src="icons/icon48.png" alt=""><h1>Nimbl Radar extension</h1></div>
-  <p>Connect the extension to Radar once. On LinkedIn you'll then get a Radar panel on profiles and in messages.</p>
-  <div class="card">
+
+  <div class="card" id="signedOut" hidden>
+    <p><strong>Sign in to connect the extension to your Radar account.</strong></p>
+    <p class="help">You'll sign in with your Nimbl Google account, the same as Radar. Everything you log from LinkedIn is then recorded as you.</p>
+    <div class="row"><button class="btn btn-primary" id="signin" type="button">Sign in with Google</button></div>
+  </div>
+
+  <div class="card" id="signedIn" hidden>
+    <div class="who" id="who"></div>
+    <div class="row">
+      <button class="btn" id="signout" type="button">Sign out</button>
+      <button class="btn" id="switch" type="button">Sign in as someone else</button>
+    </div>
+  </div>
+
+  <div id="out" role="status" aria-live="polite"></div>
+
+  <details class="card">
+    <summary>Advanced: Radar address and manual key</summary>
     <label for="url">Radar address
       <select id="url">
         <option value="https://nimbl-radar-app.onrender.com">https://nimbl-radar-app.onrender.com</option>
@@ -20,13 +47,12 @@
     <label for="key">Radar key
       <input type="password" id="key" placeholder="rk_…" autocomplete="off" spellcheck="false">
     </label>
-    <p class="help">In Radar, open <strong>Settings</strong> (top right) → Chrome extension → <strong>Create a key for this browser</strong>, then paste it here.</p>
+    <p class="help">Only needed if sign-in doesn't work: in Radar open <strong>Settings</strong> → Chrome extension → <strong>Create a key for this browser</strong>, then paste it here.</p>
     <div class="row">
-      <button class="btn btn-primary" id="save" type="button">Save and test</button>
-      <button class="btn" id="clear" type="button">Remove key</button>
+      <button class="btn" id="save" type="button">Save and test</button>
     </div>
-    <div id="out" role="status" aria-live="polite"></div>
-  </div>
+  </details>
+
   <p class="help">The extension only reads the LinkedIn page you have open and fills in text you choose. It never sends, connects or browses LinkedIn on its own: you always press Send yourself.</p>
 </main>
 <script src="options.js"></script>

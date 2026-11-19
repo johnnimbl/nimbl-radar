@@ -8,8 +8,9 @@ It only reads the page you have open and fills in text: you always press Send on
 1. Unzip `nimbl-radar-extension.zip`.
 2. In Chrome go to `chrome://extensions`, switch on **Developer mode** (top right), click **Load unpacked**
    and choose the unzipped folder.
-3. In Radar open **Settings** (top right) → Chrome extension → **Create a key for this browser**,
-   copy the key and paste it into the extension's settings page (it opens on install), then **Save and test**.
+3. The extension's settings page opens: click **Sign in with Google**, sign in to Radar with your Nimbl
+   account and click **Connect extension**. Everything you log is then recorded as you.
+   (If that ever fails, Advanced → paste a key from Radar → Settings → Chrome extension.)
 
 ## Use
 - **On a profile:** the Radar panel shows the person's stage, next follow-up and any drafts.
@@ -18,7 +19,9 @@ It only reads the page you have open and fills in text: you always press Send on
   For a message, open the message box first. The text is also copied to your clipboard.
 - **Log what you did:** after pressing Send, click **I sent the connection request** / **I sent a message**.
   When they answer, open the conversation and click **They replied…** (it picks up their last message).
-- **Home:** the switch at the top of the panel flips between the person and Home (the number is follow-ups due); the toolbar button shows Home on any site. Home shows today's follow-ups,
+- **Your profile:** click your initials at the top of the panel or popup: your numbers this month vs last
+  month, the browsers connected to your account (disconnect any you no longer use) and **Sign out**.
+- **Home:** the switch at the top of the panel flips between the person and Home (the number is follow-ups due); the toolbar button shows Home on any site. **Team / Me** at the top switches between everyone's numbers and yours. Home shows today's follow-ups,
   drafts ready to send, titles to check, new companies and roles this week, the team's outreach for the last
   7 days with the reply rate, and the CRM pipeline. On other LinkedIn pages the panel starts as a small tab;
   open it to see Home.

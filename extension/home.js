@@ -30,7 +30,7 @@
     const over = fu.filter((f) => f.daysOver > 0).length;
     const tiles =
       '<div class="hm-tiles">' +
-        tile(fu.length, "Follow-ups due", over ? over + " overdue" : "", fu.length ? "hot" : "") +
+        tile(fu.length, d.scope === "me" ? "Your follow-ups due" : "Follow-ups due", over ? over + " overdue" : "", fu.length ? "hot" : "") +
         tile(t.drafts.count, "Drafts ready", t.drafts.people.length ? t.drafts.people.length + " people" : "", "") +
         tile(t.titleChecks.length, "Titles to check", "found by the scan", "") +
       "</div>";
@@ -59,10 +59,11 @@
       (sub ? '<div class="hm-tsub">' + esc(sub) + "</div>" : "") + "</div>";
   }
 
-  function delta(now, before) {
+  function delta(now, before, period) {
     const diff = now - before;
-    if (!diff) return '<span class="hm-delta">same as the week before</span>';
-    return '<span class="hm-delta ' + (diff > 0 ? "up" : "down") + '">' + (diff > 0 ? "▲ " : "▼ ") + Math.abs(diff) + " vs week before</span>";
+    period = period || "week";
+    if (!diff) return '<span class="hm-delta">same as last ' + period + "</span>";
+    return '<span class="hm-delta ' + (diff > 0 ? "up" : "down") + '">' + (diff > 0 ? "▲ " : "▼ ") + Math.abs(diff) + " vs last " + period + "</span>";
   }
 
   function gauge(pct, label) {
@@ -78,12 +79,13 @@
     const a = d.dials.thisWeek, b = d.dials.lastWeek, r = d.dials.replyRate;
     const pct = r.contacted ? r.replied / r.contacted : 0;
     const dial = (k, label) => '<div class="hm-dial"><div class="hm-num">' + a[k] + '</div><div class="hm-lbl">' + label + "</div>" + delta(a[k], b[k]) + "</div>";
-    return '<section class="hm-sec" aria-label="Outreach"><h3>Outreach · last 7 days <span class="hm-team">whole team</span></h3>' +
+    const mine = d.scope === "me";
+    return '<section class="hm-sec" aria-label="Outreach"><h3>Outreach · last 7 days <span class="hm-team">' + (mine ? "you" : "whole team") + "</span></h3>" +
       '<div class="hm-dials">' + dial("connections", "Connection requests") + dial("messages", "Messages and emails") +
         dial("replies", "Replies") + dial("meetings", "Meetings") + "</div>" +
       '<div class="hm-rate">' + gauge(pct, "Reply rate " + Math.round(pct * 100) + "%") +
         '<div><div class="hm-lbl">Reply rate, last 30 days</div><div class="hm-sub">' + r.replied + " of " + r.contacted +
-        (r.contacted === 1 ? " person" : " people") + " the team reached out to replied</div></div></div></section>";
+        (r.contacted === 1 ? " person" : " people") + (mine ? " you" : " the team") + " reached out to replied</div></div></div></section>";
   }
 
   function fresh(d, ctx) {
@@ -127,13 +129,64 @@
       "</div></section>";
   }
 
+  // Me / Team switch at the top of Home. "Me" covers follow-ups and outreach you logged yourself.
+  function scopeSwitch(d) {
+    const mine = d.scope === "me";
+    const b = (v, label) => '<button type="button" role="tab" data-act="scope" data-scope="' + v + '" aria-selected="' + ((v === "me") === mine) + '">' + label + "</button>";
+    return '<div class="hm-scope"><div class="hm-seg" role="tablist" aria-label="Whose numbers">' + b("team", "Team") + b("me", "Me") + "</div>" +
+      '<span class="hm-sub">' + (mine
+        ? "Your follow-ups and outreach" + (d.trackedSince ? ", from what you've logged since " + esc(fmtDay(d.trackedSince)) : "")
+        : "Everyone's follow-ups and outreach") + "</span></div>";
+  }
+
   function render(d, ctx) {
     ctx = ctx || {};
     return ctx.wide
-      ? '<div class="hm"><div class="hm-wide"><div class="hm-col">' + todo(d, ctx) + '</div><div class="hm-col">' + outreach(d) + pipeline(d) + "</div></div>" + fresh(d, ctx) + "</div>"
-      : '<div class="hm">' + todo(d, ctx) + outreach(d) + fresh(d, ctx) + pipeline(d) + "</div>";
+      ? '<div class="hm">' + scopeSwitch(d) + '<div class="hm-wide"><div class="hm-col">' + todo(d, ctx) + '</div><div class="hm-col">' + outreach(d) + pipeline(d) + "</div></div>" + fresh(d, ctx) + "</div>"
+      : '<div class="hm">' + scopeSwitch(d) + todo(d, ctx) + outreach(d) + fresh(d, ctx) + pipeline(d) + "</div>";
   }
 
-  const api = { render, first };
+  const initials = (n) => String(n || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
+  // ctx.photos: extension pages can show the Google photo; on LinkedIn we use initials.
+  function avatar(u, ctx, size) {
+    const st = size ? ' style="width:' + size + "px;height:" + size + 'px"' : "";
+    return ctx && ctx.photos && u.photo
+      ? '<img class="me-av" src="' + esc(u.photo) + '" alt=""' + st + ' referrerpolicy="no-referrer">'
+      : '<span class="me-av me-ini"' + st + ">" + esc(initials(u.name || u.email)) + "</span>";
+  }
+  // The small "who's signed in" button for headers.
+  function chip(u, ctx, active) {
+    if (!u) return "";
+    return '<button type="button" class="me-chip" data-act="profile" aria-pressed="' + !!active + '" title="Signed in as ' + esc(u.name) + " (" + esc(u.email) + ')" aria-label="Your profile: ' + esc(u.name) + '">' +
+      avatar(u, ctx) + '<span class="me-name">' + esc(first(u.name)) + "</span></button>";
+  }
+
+  function renderProfile(p, ctx) {
+    ctx = ctx || {};
+    const u = p.user, a = p.thisMonth, b = p.lastMonth, r = p.replyRate;
+    const pct = r.contacted ? r.replied / r.contacted : 0;
+    const dial = (k, label) => '<div class="hm-dial"><div class="hm-num">' + a[k] + '</div><div class="hm-lbl">' + label + "</div>" + delta(a[k], b[k], "month") + "</div>";
+    const keys = p.keys.map((k) => '<li><span class="hm-main"><span>' + esc(k.label || "Chrome extension") + ' <span class="hm-sub mono">' + esc(k.prefix) + "…</span></span>" +
+      '<span class="hm-why">Connected ' + esc(fmtDay(k.createdAt)) + (k.lastUsedAt ? " · last used " + esc(fmtDay(k.lastUsedAt)) : "") + "</span></span>" +
+      (k.current ? '<span class="hm-due">This browser</span>' : '<button type="button" class="pf-link" data-act="key-revoke" data-id="' + esc(k.id) + '">Disconnect</button>') + "</li>").join("");
+    return '<div class="hm pf">' +
+      '<div class="pf-head">' + avatar(u, ctx, 52) + '<div class="pf-id"><strong>' + esc(u.name) + '</strong><span class="hm-sub">' + esc(u.email) + "</span>" +
+        '<span class="pf-role">' + (u.isOwner ? "Owner" : "Team member") + "</span></div></div>" +
+      '<section class="hm-sec" aria-label="Your numbers"><h3>Your month <span class="hm-team">vs last month</span></h3>' +
+        '<div class="hm-dials three">' + dial("connections", "Connection requests") + dial("messages", "Messages and emails") + dial("replies", "Replies") +
+          dial("meetings", "Meetings") + dial("contactsAdded", "Contacts added") + dial("savedToCrm", "Saved to the CRM") + "</div>" +
+        '<div class="hm-rate">' + gauge(pct, "Your reply rate " + Math.round(pct * 100) + "%") +
+          '<div><div class="hm-lbl">Your reply rate, last 30 days</div><div class="hm-sub">' + r.replied + " of " + r.contacted + (r.contacted === 1 ? " person" : " people") + " you reached out to replied</div></div></div>" +
+        '<div class="hm-facts"><span><b>' + p.placements + "</b> placement" + (p.placements === 1 ? "" : "s") + " recorded by you</span></div>" +
+        (p.trackedSince ? '<p class="hm-foot">Counts what you have logged since ' + esc(fmtDay(p.trackedSince)) + ", when Radar started recording who did what.</p>" : "") +
+      "</section>" +
+      '<section class="hm-sec" aria-label="Browsers"><h3>Browsers connected to your account</h3>' +
+        (keys ? '<ul class="hm-list">' + keys + "</ul>" : '<p class="hm-empty">None.</p>') + "</section>" +
+      '<div class="pf-actions"><a class="pf-btn" href="' + esc((ctx.radarUrl || "") + "/") + '" target="_blank" rel="noopener">Open Radar ↗</a>' +
+        '<button type="button" class="pf-btn" data-act="signout">Sign out of this browser</button></div>' +
+    "</div>";
+  }
+
+  const api = { render, renderProfile, chip, avatar, first };
   if (typeof window !== "undefined") window.RadarHome = api;
 })();

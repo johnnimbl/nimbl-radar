@@ -43,7 +43,46 @@ async function downloadJd(id, title) {
   return { ok: true };
 }
 
+// "Sign in with Google": open Radar's connect page; after the person signs in and clicks Connect,
+// the page sends the new key back here (see onMessageExternal below).
+async function startSignIn() {
+  const s = await settings();
+  await chrome.tabs.create({ url: s.radarUrl + "/ext/connect?ext=" + chrome.runtime.id });
+  return { ok: true };
+}
+
+// Sign out: revoke this browser's key in Radar, then forget it here.
+async function signOut() {
+  const r = await api("DELETE", "/key");
+  await chrome.storage.sync.set({ key: "" });
+  await chrome.storage.local.remove(["me"]);
+  return { ok: true, revoked: !!(r && r.ok) };
+}
+
+const RADAR_ORIGINS = ["https://nimbl-radar-app.onrender.com", "https://radar.nimbl.ai"];
+chrome.runtime.onMessageExternal.addListener((msg, sender, reply) => {
+  (async () => {
+    if (!msg || msg.type !== "radar-connect") return reply({ ok: false, error: "unknown message" });
+    const s = await settings();
+    const origin = sender.origin || (sender.url ? new URL(sender.url).origin : "");
+    if (!RADAR_ORIGINS.includes(origin) && origin !== s.radarUrl) return reply({ ok: false, error: "not from Radar" });
+    const key = String(msg.key || "");
+    if (!/^rk_[A-Za-z0-9_-]{20,}$/.test(key)) return reply({ ok: false, error: "bad key" });
+    const old = s.key;
+    await chrome.storage.sync.set({ radarUrl: origin, key });
+    await chrome.storage.local.remove(["me"]);
+    // The old key from this browser is no longer needed: revoke it (best effort).
+    if (old && old !== key) {
+      fetch(origin + "/api/ext/key", { method: "DELETE", headers: { Authorization: "Bearer " + old } }).catch(() => {});
+    }
+    reply({ ok: true });
+  })();
+  return true;
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  if (msg && msg.type === "signIn") { startSignIn().then(reply); return true; }
+  if (msg && msg.type === "signOut") { signOut().then(reply); return true; }
   if (msg && msg.type === "api") { api(msg.method || "GET", msg.path, msg.body).then(reply); return true; }
   if (msg && msg.type === "settings") { settings().then((s) => reply({ radarUrl: s.radarUrl, hasKey: !!s.key })); return true; }
   if (msg && msg.type === "downloadJd") { downloadJd(msg.id, msg.title).then(reply); return true; }

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect the Radar extension</title>
+<link rel="icon" href="/favicon-32.png">
+<style>
+:root { color-scheme: light; --ink: #0d0129; --ink-soft: #5b5470; --paper: #fffcf7; --surface: #ffffff; --surface-2: #fbf1d9; --yellow: #fae59b; --teal: #19615c; --good: #3f7d52; --critical: #a13f3f; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--paper); color: var(--ink); font: 500 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; padding: 16px; }
+.card { width: 100%; max-width: 440px; background: var(--surface); border: 1px solid var(--ink); border-radius: 14px; box-shadow: 4px 4px 0 rgba(13,1,41,.85); padding: 22px; display: flex; flex-direction: column; gap: 14px; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand img { width: 32px; height: 32px; border-radius: 8px; }
+h1 { font-size: 19px; margin: 0; line-height: 1.25; }
+p { margin: 0; }
+.muted { color: var(--ink-soft); font-size: 13.5px; }
+.who { display: flex; align-items: center; gap: 10px; background: var(--surface-2); border: 1px solid var(--ink); border-radius: 10px; padding: 10px 12px; }
+.who img, .who .ini { width: 36px; height: 36px; border-radius: 50%; flex: 0 0 auto; }
+.who .ini { display: grid; place-items: center; background: var(--yellow); border: 1px solid var(--ink); font-weight: 800; font-size: 13px; }
+.who strong { display: block; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.btn { font: inherit; font-weight: 700; font-size: 14px; border: 1px solid var(--ink); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 9px 18px; cursor: pointer; min-height: 40px; }
+.btn-primary { background: var(--yellow); box-shadow: 2px 2px 0 var(--ink); }
+.btn:disabled { opacity: .6; cursor: default; }
+.btn:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.msg { border: 1px solid currentColor; border-radius: 8px; padding: 9px 11px; font-size: 13.5px; }
+.msg.ok { color: var(--good); } .msg.err { color: var(--critical); }
+code { display: block; word-break: break-all; background: var(--paper); border: 1px solid var(--ink); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main class="card" aria-live="polite">
+  <div class="brand"><img src="/icon-192.png" alt=""><h1>Connect the Nimbl Radar extension</h1></div>
+  <div class="who" id="who" hidden></div>
+  <p id="intro">Connect the Chrome extension in this browser to your Radar account. Anything you log from LinkedIn will be recorded as you.</p>
+  <div class="row" id="actions">
+    <button class="btn btn-primary" id="connect" type="button">Connect extension</button>
+    <button class="btn" id="cancel" type="button">Cancel</button>
+  </div>
+  <div id="out" role="status"></div>
+  <div id="fallback" hidden>
+    <p class="muted">Paste this key into the extension's settings instead (Advanced → Radar key). It's shown once.</p>
+    <code id="key"></code>
+    <div class="row" style="margin-top:8px"><button class="btn" id="copy" type="button">Copy key</button></div>
+  </div>
+</main>
+<script src="/ext-connect.js"></script>
+</body>
+</html>

@@ -82,8 +82,14 @@ app.get("/auth/google", passport.authenticate("google", { scope: ["profile", "em
 
 app.get(
   "/auth/google/callback",
-  passport.authenticate("google", { failureRedirect: "/auth/login?error=domain" }),
-  (req, res) => res.redirect("/")
+  passport.authenticate("google", { failureRedirect: "/auth/login?error=domain", keepSessionInfo: true }),
+  (req, res) => {
+    ext.recordUser(pool, req.user).catch((err) => console.error("recordUser:", err.message));
+    // Signing in from the extension's "Sign in with Google" lands back on the connect page.
+    const back = req.session && req.session.returnTo;
+    if (req.session) delete req.session.returnTo;
+    res.redirect(back && /^\/ext\/connect(\?|$)/.test(back) ? back : "/");
+  }
 );
 
 app.post("/auth/logout", (req, res) => {
@@ -96,6 +102,10 @@ app.get("/auth/me", (req, res) => {
     return res.json({ enabled: false, user: t || null, isOwner: isOwner(req) });
   }
   if (req.isAuthenticated && req.isAuthenticated()) {
+    if (req.session && !req.session.userRecorded) {
+      req.session.userRecorded = true;
+      ext.recordUser(pool, req.user).catch((err) => console.error("recordUser:", err.message));
+    }
     return res.json({ enabled: true, user: req.user, isOwner: isOwner(req) });
   }
   res.status(401).json({ enabled: true, user: null });
@@ -148,7 +158,17 @@ const wrap = (fn) => async (req, res) => {
 };
 extApi.get("/ping", wrap(async (req) => ({ ok: true, user: req.extUser })));
 extApi.get("/lookup", wrap((req) => ext.lookup(as(req), req.query)));
-extApi.get("/home", wrap(() => ext.home(pool)));
+extApi.get("/home", wrap((req) => ext.home(pool, { me: req.query.scope === "me" ? req.extUser : "" })));
+extApi.get("/me", wrap((req) => ext.me(pool, req.extUser, req.extKeyId, isOwner(req))));
+extApi.get("/profile", wrap((req) => ext.profile(pool, req.extUser, req.extKeyId, isOwner(req))));
+// Sign out: revoke the key this browser is using.
+extApi.delete("/key", wrap(async (req) => ({ ok: await ext.revokeOwnKey(pool, req.extUser, req.extKeyId) })));
+// Disconnect another of your browsers.
+extApi.delete("/keys/:id", wrap(async (req) => {
+  const ok = await ext.revokeOwnKey(pool, req.extUser, req.params.id);
+  if (!ok) throw Object.assign(new Error("That browser isn't connected to your account."), { status: 404 });
+  return { ok };
+}));
 extApi.get("/leads", wrap(async (req) => ({ items: await ext.searchLeads(pool, req.query.q) })));
 extApi.post("/contacts", wrap((req) => ext.addContact(as(req), req.body || {})));
 extApi.post("/contacts/:id/checked", wrap((req) => ext.markChecked(as(req), req.params.id)));
@@ -170,6 +190,25 @@ extApi.get("/job-descriptions/:id/pdf", async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: "Failed to build the PDF." }); }
 });
 app.use("/api/ext", extApi);
+
+// --- "Sign in with Google" for the Chrome extension -------------------------------
+// The extension opens /ext/connect?ext=<extension id>. After the normal Radar sign-in, the person
+// clicks Connect; the page creates a key for them and hands it straight to the extension
+// (chrome.runtime.sendMessage, allowed by the extension's externally_connectable list).
+app.get("/ext/connect", (req, res, next) => {
+  if (googleLoginEnabled && !(req.isAuthenticated && req.isAuthenticated()) && req.session) {
+    req.session.returnTo = req.originalUrl; // come back here after Google sign-in
+  }
+  next();
+}, ensureAuthenticated, (req, res) => res.sendFile(path.join(__dirname, "..", "public", "ext-connect.html")));
+app.post("/api/extension-keys/connect", ensureAuthenticated, async (req, res) => {
+  if (!/application\/json/.test(req.headers["content-type"] || "")) return res.status(400).json({ error: "Bad request." });
+  try {
+    const email = emailOf(req);
+    const key = await ext.createKey(pool, "Chrome · signed in with Google", email);
+    res.json({ key, user: { email, name: (req.user && req.user.name) || "" } });
+  } catch (err) { console.error(err); res.status(500).json({ error: "Failed to connect the extension." }); }
+});
 
 // --- Backups (Google Drive + download) ----------------------------------------
 app.get("/auth/drive", ensureAuthenticated, requireOwner, (req, res) => {

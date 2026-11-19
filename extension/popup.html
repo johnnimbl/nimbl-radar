@@ -20,13 +20,14 @@ body { width: 400px; }
 <main class="wrap">
   <div class="top">
     <img src="icons/icon48.png" alt="">
-    <h1>Radar home</h1>
+    <h1 id="title">Radar home</h1>
+    <span id="chip"></span>
     <button class="icon" id="reload" type="button" title="Refresh" aria-label="Refresh">↻</button>
     <button class="btn btn-primary" id="open" type="button">Open Radar</button>
-    <button class="btn" id="settings" type="button">Settings</button>
+    <button class="icon" id="settings" type="button" title="Settings" aria-label="Settings">⚙</button>
   </div>
   <div id="home"><p class="help">Loading your Radar numbers…</p></div>
-  <p class="help">On LinkedIn, the Radar panel shows each person's record, and its Home button brings you back here. Select text on any page and right-click “Add to Radar…” to save it as a note or a job posting.</p>
+  <p class="help" id="foot">On LinkedIn, the Radar panel shows each person's record, with Home a click away. Select text on any page and right-click “Add to Radar…” to save it as a note or a job posting.</p>
 </main>
 <script src="home.js"></script>
 <script src="popup.js"></script>

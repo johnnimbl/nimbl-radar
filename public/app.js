@@ -1186,7 +1186,7 @@
       '<p>Use Radar on LinkedIn: see who is already in Radar, save people in one click, insert drafts and log touches.</p>' +
       '<p class="help">1. <a href="/downloads/nimbl-radar-extension.zip" download>Download the extension</a> and unzip it. ' +
       '2. In Chrome open <span class="mono">chrome://extensions</span>, turn on Developer mode, click “Load unpacked” and pick the unzipped folder. ' +
-      '3. Create a key below and paste it into the extension.</p>' +
+      '3. On the extension\'s settings page click <strong>Sign in with Google</strong> and then Connect. (Or create a key below and paste it in.)</p>' +
       (extNewKey ? '<div class="ext-key"><p><strong>Your new key</strong> (shown once, copy it now):</p><code class="mono" id="ext-new-key">' + escapeHtml(extNewKey) + '</code>' +
         '<div class="jd-actions"><button type="button" class="btn btn-sm btn-primary" data-action="ext-key-copy">Copy key</button><button type="button" class="btn-link" data-action="ext-key-hide">Done</button></div></div>' : '') +
       (list ? (isOwner && keys.some(function (k) { return String(k.createdBy || "").toLowerCase() !== myEmail(); }) ? '<p class="help">Everyone\'s keys are listed. Revoke one to cut off that browser straight away.</p>' : '') + '<ul class="ext-keys">' + list + '</ul>' : '') +

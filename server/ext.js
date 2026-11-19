@@ -64,9 +64,10 @@ function keyAuth(pool) {
     const m = /^Bearer\s+(rk_[A-Za-z0-9_-]{20,})$/.exec(req.headers.authorization || "");
     if (!m) return res.status(401).json({ error: "Add your Radar key in the extension's settings." });
     try {
-      const r = await pool.query("update api_keys set last_used_at = now() where key_hash = $1 and revoked_at is null returning created_by", [hash(m[1])]);
+      const r = await pool.query("update api_keys set last_used_at = now() where key_hash = $1 and revoked_at is null returning id, created_by", [hash(m[1])]);
       if (!r.rows.length) return res.status(401).json({ error: "This Radar key isn't valid any more. Create a new one in Radar → Settings." });
       req.extUser = r.rows[0].created_by;
+      req.extKeyId = r.rows[0].id;
       next();
     } catch (err) { next(err); }
   };
@@ -265,16 +266,19 @@ async function markChecked(pool, id) {
 
 // The extension's Home screen: what needs doing today, what's new, how outreach is going (whole
 // team) and where the pipeline stands. One round of read-only queries.
-async function home(pool) {
+async function home(pool, opts = {}) {
+  const me = opts.me ? String(opts.me).toLowerCase() : "";
   const q = (sql, params) => pool.query(sql, params).then((r) => r.rows);
   const OPEN = "l.status not in ('Lost','Not a Fit')";
-  const [meta, follow, drafts, checks, newLeads, newRoles, dials, rate, pipe, jds, cands, totals] = await Promise.all([
+  const [meta, follow, drafts, checks, newLeads, newRoles, dials, rate, pipe, jds, cands, totals, since] = await Promise.all([
     q("select last_scanned from meta where id = 1"),
     q(`select c.id, c.name, c.title, c.linkedin, c.stage, c.next_follow_up, c.sequence_step, l.id lead_id, l.company, l.in_crm,
               (current_date - c.next_follow_up) as days_over
          from contacts c join leads l on l.id = c.lead_id
         where ${OPEN} and c.next_follow_up is not null and c.next_follow_up <= current_date and c.stage <> 'Not interested'
-        order by c.next_follow_up, l.in_crm desc, c.name`),
+          and ($1 = '' or lower(coalesce(nullif((select a.author from activities a where a.contact_id = c.id and a.type <> 'Note'
+                order by a.activity_date desc, a.sort_order desc limit 1), ''), c.added_by)) = $1)
+        order by c.next_follow_up, l.in_crm desc, c.name`, [me]),
     q(`select d.contact_id, d.touch, d.kind, c.name, c.linkedin, l.id lead_id, l.company, l.in_crm
          from agent_drafts d join leads l on l.id = d.lead_id left join contacts c on c.id = d.contact_id
         where d.used_at is null and d.dismissed_at is null and d.kind <> 'contact' and d.created_at > now() - interval '21 days'
@@ -292,14 +296,17 @@ async function home(pool) {
               count(*) filter (where type in ('LinkedIn message','Email','Call') and direction = 'Outbound') messages,
               count(*) filter (where direction = 'Inbound' and type <> 'Note') replies,
               count(*) filter (where type = 'Meeting' or (type = 'Note' and summary like '%→ Meeting booked%')) meetings
-         from activities where activity_date > current_date - 14 group by 1`),
-    q(`select count(distinct contact_id) filter (where direction = 'Outbound' and type <> 'Note') contacted,
-              count(distinct contact_id) filter (where direction = 'Inbound' and type <> 'Note') replied
-         from activities where activity_date > current_date - 30`),
+         from activities where activity_date > current_date - 14 and ($1 = '' or lower(author) = $1) group by 1`, [me]),
+    q(`with mine as (select distinct contact_id from activities
+                        where activity_date > current_date - 30 and direction = 'Outbound' and type <> 'Note' and ($1 = '' or lower(author) = $1))
+       select (select count(*) from mine) contacted,
+              (select count(distinct a.contact_id) from activities a join mine m on m.contact_id = a.contact_id
+                where a.activity_date > current_date - 30 and a.direction = 'Inbound' and a.type <> 'Note') replied`, [me]),
     q(`select status, count(*)::int n from leads l where in_crm group by status`),
     q(`select status, count(*)::int n from job_descriptions group by status`).catch(() => []),
     q(`select stage, count(*)::int n from candidates group by stage`),
     q(`select count(*)::int leads, count(*) filter (where in_crm)::int crm from leads`),
+    q(`select min(at) at from audit_log`),
   ]);
   const person = (r) => ({ contactId: r.id || r.contact_id || "", name: r.name || "", title: r.title || "", linkedin: r.linkedin || "", leadId: r.lead_id, company: r.company, inCrm: !!r.in_crm });
   const wk = (k) => { const r = dials.find((x) => x.wk === k) || {}; return { connections: +r.connections || 0, messages: +r.messages || 0, replies: +r.replies || 0, meetings: +r.meetings || 0 }; };
@@ -309,6 +316,8 @@ async function home(pool) {
   const draftsByContact = {};
   drafts.forEach((d) => { const k = d.contact_id || d.lead_id; if (!draftsByContact[k]) draftsByContact[k] = Object.assign(person(d), { touch: d.touch, kind: d.kind }); });
   return {
+    scope: me ? "me" : "team",
+    trackedSince: since[0] && since[0].at ? dstr(since[0].at) : "",
     today: dstr(new Date()),
     lastScanned: dstr(meta[0] && meta[0].last_scanned),
     todo: {
@@ -331,4 +340,65 @@ async function home(pool) {
   };
 }
 
-module.exports = { home, markChecked, ensureSchema, createKey, listKeys, revokeKey, keyAuth, lookup, searchLeads, addContact, logActivity, addNote, profileSlug };
+// Who the extension is signed in as (from the key), with name and photo from their last Radar sign-in.
+async function me(pool, email, keyId, isOwner) {
+  const u = (await pool.query("select name, photo from radar_users where email = $1", [String(email || "").toLowerCase()])).rows[0] || {};
+  const nice = String(email || "").split("@")[0].split(/[._-]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+  return { email: email || "", name: u.name || nice || "Radar user", photo: u.photo || "", isOwner: !!isOwner, keyId: keyId || "" };
+}
+
+// The extension's profile page: your numbers this month vs last month (from what you logged),
+// the browsers connected to your account, and when Radar started recording who did what.
+async function profile(pool, email, keyId, isOwner) {
+  const e = String(email || "").toLowerCase();
+  const q = (sql, params) => pool.query(sql, params).then((r) => r.rows);
+  const month = (col) => `case when ${col} >= date_trunc('month', current_date) then 'this' when ${col} >= date_trunc('month', current_date) - interval '1 month' then 'last' end`;
+  const [who, acts, rate, adds, saved, placed, keys, since] = await Promise.all([
+    me(pool, e, keyId, isOwner),
+    q(`select ${month("activity_date")} as m,
+              count(*) filter (where type = 'LinkedIn connection' and direction = 'Outbound') connections,
+              count(*) filter (where type in ('LinkedIn message','Email','Call') and direction = 'Outbound') messages,
+              count(*) filter (where direction = 'Inbound' and type <> 'Note') replies,
+              count(*) filter (where type = 'Meeting' or (type = 'Note' and summary like '%→ Meeting booked%')) meetings
+         from activities where lower(author) = $1 and activity_date >= date_trunc('month', current_date) - interval '1 month' group by 1`, [e]),
+    q(`with mine as (select distinct contact_id from activities where lower(author) = $1 and direction = 'Outbound' and type <> 'Note'
+                        and activity_date > current_date - 30)
+       select (select count(*) from mine) contacted,
+              (select count(distinct a.contact_id) from activities a join mine m on m.contact_id = a.contact_id
+                where a.direction = 'Inbound' and a.type <> 'Note' and a.activity_date > current_date - 30) replied`, [e]),
+    q(`select ${month("at")} as m, count(*)::int n from audit_log where lower(actor) = $1 and action = 'contact' and detail like 'Added contact%' group by 1`, [e]),
+    q(`select ${month("at")} as m, count(*)::int n from audit_log where lower(actor) = $1 and action = 'crm' and detail = 'Saved to the CRM' group by 1`, [e]),
+    q(`select count(*)::int n from audit_log where lower(actor) = $1 and action = 'candidate' and detail like '%→ Placed'`, [e]),
+    q(`select id, label, prefix, created_at, last_used_at from api_keys where lower(created_by) = $1 and revoked_at is null order by last_used_at desc nulls last, created_at desc`, [e]),
+    q(`select min(at) at from audit_log`),
+  ]);
+  const pick = (rows, m) => { const r = rows.find((x) => x.m === m) || {}; return { connections: +r.connections || 0, messages: +r.messages || 0, replies: +r.replies || 0, meetings: +r.meetings || 0 }; };
+  const n = (rows, m) => (rows.find((x) => x.m === m) || {}).n || 0;
+  const thisM = Object.assign(pick(acts, "this"), { contactsAdded: n(adds, "this"), savedToCrm: n(saved, "this") });
+  const lastM = Object.assign(pick(acts, "last"), { contactsAdded: n(adds, "last"), savedToCrm: n(saved, "last") });
+  const r0 = rate[0] || {};
+  return {
+    user: who,
+    thisMonth: thisM, lastMonth: lastM,
+    replyRate: { contacted: +r0.contacted || 0, replied: +r0.replied || 0 },
+    placements: (placed[0] || {}).n || 0,
+    trackedSince: since[0] && since[0].at ? dstr(since[0].at) : "",
+    keys: keys.map((k) => ({ id: k.id, label: k.label, prefix: k.prefix, createdAt: dstr(k.created_at), lastUsedAt: k.last_used_at ? dstr(k.last_used_at) : "", current: k.id === keyId })),
+  };
+}
+
+async function revokeOwnKey(pool, email, id) {
+  const r = await pool.query("update api_keys set revoked_at = now() where id = $1 and lower(created_by) = $2 and revoked_at is null returning id",
+    [String(id), String(email || "").toLowerCase()]);
+  return r.rows.length > 0;
+}
+
+async function recordUser(pool, user) {
+  if (!user || !user.email) return;
+  await pool.query(
+    `insert into radar_users (email, name, photo) values ($1, $2, $3)
+     on conflict (email) do update set name = excluded.name, photo = excluded.photo, last_seen = now()`,
+    [String(user.email).toLowerCase(), String(user.name || "").slice(0, 200), String(user.photo || "").slice(0, 1000)]);
+}
+
+module.exports = { me, profile, revokeOwnKey, recordUser, home, markChecked, ensureSchema, createKey, listKeys, revokeKey, keyAuth, lookup, searchLeads, addContact, logActivity, addNote, profileSlug };

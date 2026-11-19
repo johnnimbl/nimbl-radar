@@ -37,7 +37,11 @@
     view: "person",        // "person" (the profile or conversation) or "home" (the dashboard)
     otherOpen: false,      // panel open on other LinkedIn pages (feed, search…): closed until you open it
     home: null, homeLoading: false, homeError: "", homeAt: 0,
+    scope: "team",         // Home numbers: "team" or "me"
+    me: null,              // who the extension is signed in as {email, name, photo, isOwner}
+    prof: null, profLoading: false, profError: "",
   };
+  chrome.storage.local.get({ homeScope: "team" }).then((v) => { S.scope = v.homeScope === "me" ? "me" : "team"; });
   chrome.storage.local.get({ panelOpen: true, panelWide: false }).then((v) => { S.open = v.panelOpen; S.wide = v.panelWide; render(); });
 
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -212,18 +216,44 @@
     if (!S.contact && S.companies.length === 1) S.chosenLead = S.companies[0];
     render();
     loadHome(); // keeps the Home count in the switch current (cached for a minute)
+    loadMe();
   }
 
   // Home dashboard data (cached for a minute; ↻ reloads it).
   async function loadHome(force) {
-    if (S.homeLoading || (!force && S.home && Date.now() - S.homeAt < 60000)) { render(); return; }
+    if (S.homeLoading || (!force && S.home && S.home.scope === S.scope && Date.now() - S.homeAt < 60000)) { render(); return; }
     S.homeLoading = true; S.homeError = ""; render();
-    const r = await api("GET", "/home");
+    loadMe();
+    const r = await api("GET", "/home?scope=" + S.scope);
     S.homeLoading = false;
     if (r && r.ok) { S.home = r.data; S.homeAt = Date.now(); S.radarUrl = r.radarUrl; }
     else { S.homeError = (r && r.error) || "Couldn't reach Radar."; S.needsKey = !!(r && r.needsKey); }
     render();
   }
+  // Who the extension is signed in as (cached for 10 minutes).
+  async function loadMe(force) {
+    if (!force && S.me) return;
+    const c = (await chrome.storage.local.get({ me: null })).me;
+    if (!force && c && Date.now() - c.at < 600000) { S.me = c.user; render(); return; }
+    const r = await api("GET", "/me");
+    if (r && r.ok) { S.me = r.data; chrome.storage.local.set({ me: { user: r.data, at: Date.now() } }); render(); }
+  }
+  async function loadProfile() {
+    S.profLoading = true; S.profError = ""; render();
+    const r = await api("GET", "/profile");
+    S.profLoading = false;
+    if (r && r.ok) { S.prof = r.data; S.me = r.data.user; S.radarUrl = r.radarUrl; }
+    else { S.profError = (r && r.error) || "Couldn't reach Radar."; S.needsKey = !!(r && r.needsKey); }
+    render();
+  }
+  function onPersonPage() { return !!(S.page && S.page.type !== "other"); }
+  // Signed in or out from the settings page or Radar: start fresh.
+  chrome.storage.onChanged.addListener((ch, area) => {
+    if (area !== "sync" || !ch.key) return;
+    S.me = null; S.prof = null; S.home = null; S.needsKey = !ch.key.newValue;
+    if (ch.key.newValue) { loadMe(true); if (S.view === "home") loadHome(true); else if (S.view === "profile") loadProfile(); else refresh(); }
+    else render();
+  });
   function isOpen() { return S.page && S.page.type === "other" ? S.otherOpen : S.open; }
 
   async function doSearch() {
@@ -253,14 +283,20 @@
     }
     const onPerson = pg.type !== "other";
     const homeView = S.view === "home";
+    const profView = S.view === "profile";
     let body = "";
-    if (homeView) {
-      if (S.needsKey) body = '<p>Connect the extension to Radar first.</p><div class="row"><button type="button" class="btn btn-primary" data-act="options">Open settings</button></div>';
+    if (profView) {
+      if (S.needsKey) body = '<p>You are signed out.</p><div class="row"><button type="button" class="btn btn-primary" data-act="signin">Sign in with Google</button></div>';
+      else if (S.profError) body = '<div class="msg err">' + esc(S.profError) + '</div><div class="row"><button type="button" class="btn" data-act="retry">Try again</button></div>';
+      else if (!S.prof) body = '<p class="muted">Loading your profile…</p>';
+      else body = window.RadarHome.renderProfile(S.prof, { radarUrl: S.radarUrl });
+    } else if (homeView) {
+      if (S.needsKey) body = '<p>Sign in to connect the extension to your Radar account.</p><div class="row"><button type="button" class="btn btn-primary" data-act="signin">Sign in with Google</button></div>';
       else if (S.homeError) body = '<div class="msg err">' + esc(S.homeError) + '</div><div class="row"><button type="button" class="btn" data-act="retry">Try again</button></div>';
       else if (!S.home) body = '<p class="muted">Loading your Radar numbers…</p>';
       else body = window.RadarHome.render(S.home, { radarUrl: S.radarUrl, wide: S.wide });
     } else if (S.loading) body = '<p class="muted">Looking this person up in Radar…</p>';
-    else if (S.needsKey) body = '<p>Connect the extension to Radar first.</p><div class="row"><button type="button" class="btn btn-primary" data-act="options">Open settings</button></div>';
+    else if (S.needsKey) body = '<p>Sign in to connect the extension to your Radar account.</p><div class="row"><button type="button" class="btn btn-primary" data-act="signin">Sign in with Google</button></div>';
     else if (S.error) body = '<div class="msg err">' + esc(S.error) + '</div><div class="row"><button type="button" class="btn" data-act="retry">Try again</button></div>';
     else if (!S.person) body = pg.type === "messaging" ? '<p class="muted">Open a conversation to see that person in Radar.</p>' : '<p class="muted">Couldn\'t read this profile.</p><div class="row"><button type="button" class="btn" data-act="retry">Try again</button></div>';
     else if (S.contact) body = renderContact(S.contact);
@@ -269,6 +305,7 @@
     wrap.innerHTML =
       '<section class="panel' + (S.wide ? " wide" : "") + '" aria-label="Nimbl Radar">' +
         '<div class="top"><div class="head"><img src="' + chrome.runtime.getURL("icons/icon32.png") + '" alt=""><strong>Nimbl Radar</strong>' +
+          (S.me ? window.RadarHome.chip(S.me, {}, profView) : "") +
           '<button type="button" class="icon-btn" data-act="wide" title="' + (S.wide ? "Show less" : (homeView ? "Wider dashboard" : "Show the full client card")) + '" aria-label="' + (S.wide ? "Show less" : "Show more") + '" aria-pressed="' + !!S.wide + '">' + (S.wide ? "⇥" : "⇤") + "</button>" +
           '<button type="button" class="icon-btn" data-act="retry" title="Refresh" aria-label="Refresh">↻</button>' +
           '<button type="button" class="icon-btn" data-act="close" title="Hide panel" aria-label="Hide panel">–</button></div>' +
@@ -285,7 +322,7 @@
     const tab = (view, label, sel) => '<button type="button" role="tab" data-act="view" data-view="' + view + '" aria-selected="' + sel + '">' + label + "</button>";
     const home = HOME_ICON + "<span>Home</span>" + (due ? '<span class="sw-count" title="Follow-ups due">' + due + "</span>" : "");
     return '<div class="switch" role="tablist" aria-label="Panel view">' +
-      (onPerson ? tab("person", '<span class="who">' + esc(who) + "</span>", !homeView) : "") + tab("home", home, homeView) + "</div>";
+      (onPerson ? tab("person", '<span class="who">' + esc(who) + "</span>", S.view === "person") : "") + tab("home", home, homeView) + "</div>";
   }
 
   function renderContact(c) {
@@ -445,8 +482,27 @@
     const other = S.page && S.page.type === "other";
     if (act === "close") { if (other) S.otherOpen = false; else { S.open = false; chrome.storage.local.set({ panelOpen: false }); } render(); return; }
     if (act === "open") { if (other) { S.otherOpen = true; loadHome(); } else { S.open = true; chrome.storage.local.set({ panelOpen: true }); render(); } return; }
+    if (act === "profile") { if (S.view === "profile") { S.view = onPersonPage() ? "person" : "home"; if (S.view === "home") loadHome(); else render(); } else { S.view = "profile"; loadProfile(); } return; }
+    if (act === "scope") {
+      const v = b.getAttribute("data-scope") === "me" ? "me" : "team";
+      if (v !== S.scope) { S.scope = v; chrome.storage.local.set({ homeScope: v }); loadHome(true); }
+      return;
+    }
+    if (act === "signin") { chrome.runtime.sendMessage({ type: "signIn" }); return; }
+    if (act === "signout") {
+      if (!confirm("Sign this browser out of Radar? You can sign in again any time.")) return;
+      await chrome.runtime.sendMessage({ type: "signOut" });
+      S.me = null; S.prof = null; S.home = null; S.needsKey = true;
+      render();
+      return;
+    }
+    if (act === "key-revoke") {
+      const r = await api("DELETE", "/keys/" + encodeURIComponent(id));
+      if (r && r.ok) { flash("That browser is disconnected.", true); loadProfile(); } else flash((r && r.error) || "Couldn't disconnect it.", false);
+      return;
+    }
     if (act === "view") { const v = b.getAttribute("data-view"); if (v === S.view) return; S.view = v; if (v === "home") loadHome(); else render(); return; }
-    if (act === "retry") { if (S.view === "home") loadHome(true); else refresh(); return; }
+    if (act === "retry") { if (S.view === "home") loadHome(true); else if (S.view === "profile") loadProfile(); else refresh(); return; }
     if (act === "wide") { S.wide = !S.wide; chrome.storage.local.set({ panelWide: S.wide }); render(); return; }
     if (act === "jd-download") {
       b.disabled = true;

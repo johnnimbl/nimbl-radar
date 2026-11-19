@@ -85,3 +85,14 @@ do $$ declare t text; begin
     end if;
   end loop;
 end $$;
+
+-- People who have signed in to Radar (name and photo from Google), so the extension can show who
+-- it is connected as. Updated on sign-in; no tokens are stored here.
+create table if not exists radar_users (
+  email text primary key,
+  name text not null default '',
+  photo text not null default '',
+  first_seen timestamptz not null default now(),
+  last_seen timestamptz not null default now()
+);
+alter table radar_users enable row level security;
