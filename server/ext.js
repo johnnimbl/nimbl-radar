@@ -344,7 +344,8 @@ async function home(pool, opts = {}) {
 async function me(pool, email, keyId, isOwner) {
   const u = (await pool.query("select name, photo from radar_users where email = $1", [String(email || "").toLowerCase()])).rows[0] || {};
   const nice = String(email || "").split("@")[0].split(/[._-]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
-  return { email: email || "", name: u.name || nice || "Radar user", photo: u.photo || "", isOwner: !!isOwner, keyId: keyId || "" };
+  const photo = u.photo && u.photo.length !== 1000 ? u.photo : ""; // exactly 1000 = cut off by an old limit
+  return { email: email || "", name: u.name || nice || "Radar user", photo, isOwner: !!isOwner, keyId: keyId || "" };
 }
 
 // The extension's profile page: your numbers this month vs last month (from what you logged),
@@ -398,7 +399,7 @@ async function recordUser(pool, user) {
   await pool.query(
     `insert into radar_users (email, name, photo) values ($1, $2, $3)
      on conflict (email) do update set name = excluded.name, photo = excluded.photo, last_seen = now()`,
-    [String(user.email).toLowerCase(), String(user.name || "").slice(0, 200), String(user.photo || "").slice(0, 1000)]);
+    [String(user.email).toLowerCase(), String(user.name || "").slice(0, 200), String(user.photo || "").slice(0, 8000)]);
 }
 
 module.exports = { me, profile, revokeOwnKey, recordUser, home, markChecked, ensureSchema, createKey, listKeys, revokeKey, keyAuth, lookup, searchLeads, addContact, logActivity, addNote, profileSlug };

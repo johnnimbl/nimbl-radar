@@ -102,8 +102,8 @@ app.get("/auth/me", (req, res) => {
     return res.json({ enabled: false, user: t || null, isOwner: isOwner(req) });
   }
   if (req.isAuthenticated && req.isAuthenticated()) {
-    if (req.session && !req.session.userRecorded) {
-      req.session.userRecorded = true;
+    if (req.session && !req.session.userRecorded2) { // "2": re-save once, photo links used to be cut off
+      req.session.userRecorded2 = true;
       ext.recordUser(pool, req.user).catch((err) => console.error("recordUser:", err.message));
     }
     return res.json({ enabled: true, user: req.user, isOwner: isOwner(req) });

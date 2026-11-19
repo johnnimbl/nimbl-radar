@@ -19,6 +19,12 @@ async function refresh() {
   const photo = /^(https:|data:image\/)/.test(u.photo || "") ? u.photo : "";
   $("who").innerHTML = (photo ? '<img src="' + esc(photo) + '" alt="" referrerpolicy="no-referrer">' : '<span class="ini">' + esc(initials(u.name)) + "</span>") +
     "<div><strong>" + esc(u.name) + '</strong><span class="help">Signed in as ' + esc(u.email) + "</span></div>";
+  // A photo that can't load shows initials instead of a broken image.
+  const img = $("who").querySelector("img");
+  if (img) {
+    const swap = () => { const sp = document.createElement("span"); sp.className = "ini"; sp.textContent = initials(u.name); img.replaceWith(sp); };
+    if (img.complete && img.naturalWidth === 0) swap(); else img.addEventListener("error", swap, { once: true });
+  }
   $("signedOut").hidden = true; $("signedIn").hidden = false;
 }
 
