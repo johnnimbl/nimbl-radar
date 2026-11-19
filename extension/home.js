@@ -185,8 +185,7 @@
       '<span class="hm-why">Connected ' + esc(fmtDay(k.createdAt)) + (k.lastUsedAt ? " · last used " + esc(fmtDay(k.lastUsedAt)) : "") + "</span></span>" +
       (k.current ? '<span class="hm-due">This browser</span>' : '<button type="button" class="pf-link" data-act="key-revoke" data-id="' + esc(k.id) + '">Disconnect</button>') + "</li>").join("");
     return '<div class="hm pf">' +
-      '<div class="pf-head">' + avatar(u, ctx, 32) + '<div class="pf-id"><strong>' + esc(u.name) + '</strong> <span class="hm-sub">' + esc(u.email) +
-        " · " + (u.isOwner ? "Owner" : "Team member") + "</span></div></div>" +
+      '<div class="pf-head">' + avatar(u, ctx, 32) + '<div class="pf-id"><strong>' + esc(u.name) + '</strong> <span class="hm-sub">' + esc(u.email) + "</span></div></div>" +
       '<section class="hm-sec" aria-label="Your numbers"><h3>Your month <span class="hm-team">vs last month</span></h3>' +
         '<div class="hm-dials three">' + dial("connections", "Connection requests") + dial("messages", "Messages and emails") + dial("replies", "Replies") +
           dial("meetings", "Meetings") + dial("contactsAdded", "Contacts added") + dial("savedToCrm", "Saved to the CRM") + "</div>" +
