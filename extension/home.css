@@ -54,7 +54,7 @@
 .hm-seg button:focus-visible, .me-chip:focus-visible, .pf-btn:focus-visible, .pf-link:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
 
 /* Who's signed in (header chip) */
-.me-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; background: transparent; color: var(--ink); border-radius: 999px; padding: 2px 8px 2px 2px; cursor: pointer; font: 700 12px/1 ui-sans-serif, system-ui, sans-serif; min-height: 32px; max-width: 140px; }
+.me-chip { display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; background: transparent; color: var(--ink); border-radius: 999px; padding: 2px; cursor: pointer; font: 700 12px/1 ui-sans-serif, system-ui, sans-serif; min-width: 32px; min-height: 32px; }
 .me-chip:hover, .me-chip[aria-pressed="true"] { border-color: var(--ink); background: var(--surface); }
 .me-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .me-av { width: 26px; height: 26px; border-radius: 50%; flex: 0 0 auto; object-fit: cover; }

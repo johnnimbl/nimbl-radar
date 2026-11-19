@@ -173,7 +173,7 @@
   function chip(u, ctx, active) {
     if (!u) return "";
     return '<button type="button" class="me-chip" data-act="profile" aria-pressed="' + !!active + '" title="Signed in as ' + esc(u.name) + " (" + esc(u.email) + ')" aria-label="Your profile: ' + esc(u.name) + '">' +
-      avatar(u, ctx) + '<span class="me-name">' + esc(first(u.name)) + "</span></button>";
+      avatar(u, ctx) + "</button>";
   }
 
   function renderProfile(p, ctx) {
