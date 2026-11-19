@@ -61,10 +61,10 @@
 .me-ini { display: inline-grid; place-items: center; background: var(--yellow); border: 1px solid var(--ink); color: #0d0129; font-weight: 800; font-size: 11px; }
 
 /* Profile page */
-.pf-head { display: flex; align-items: center; gap: 12px; }
-.pf-head .me-ini { font-size: 18px; }
-.pf-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.pf-id strong { font-size: 17px; line-height: 1.2; }
+.pf-head { display: flex; align-items: center; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid rgba(13, 1, 41, .12); }
+.pf-head .me-ini { font-size: 12px; }
+.pf-id { min-width: 0; line-height: 1.35; }
+.pf-id strong { font-size: 14px; }
 .pf-role { align-self: flex-start; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; border: 1px solid var(--teal); color: var(--teal); border-radius: 999px; padding: 2px 8px; margin-top: 2px; }
 .hm-dials.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .hm-list li .pf-link, .hm-list li .hm-due:last-child { margin-left: auto; }

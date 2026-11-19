@@ -148,11 +148,26 @@
 
   const initials = (n) => String(n || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
   // ctx.photos: extension pages can show the Google photo; on LinkedIn we use initials.
+  // ctx.photoUrl: the person's Google photo as a data: URL (from the extension's background).
+  // If it's missing or fails to load, initials show instead (see fixAvatars).
   function avatar(u, ctx, size) {
     const st = size ? ' style="width:' + size + "px;height:" + size + 'px"' : "";
-    return ctx && ctx.photos && u.photo
-      ? '<img class="me-av" src="' + esc(u.photo) + '" alt=""' + st + ' referrerpolicy="no-referrer">'
-      : '<span class="me-av me-ini"' + st + ">" + esc(initials(u.name || u.email)) + "</span>";
+    const ini = esc(initials(u.name || u.email));
+    return ctx && ctx.photoUrl
+      ? '<img class="me-av" src="' + esc(ctx.photoUrl) + '" alt="" data-ini="' + ini + '"' + st + ">"
+      : '<span class="me-av me-ini"' + st + ">" + ini + "</span>";
+  }
+  // Swap any photo that fails to load (e.g. blocked by the page) for initials.
+  function fixAvatars(root) {
+    root.querySelectorAll("img.me-av").forEach((img) => {
+      const swap = () => {
+        const s = document.createElement("span");
+        s.className = "me-av me-ini"; s.textContent = img.getAttribute("data-ini") || "?";
+        if (img.style.width) { s.style.width = img.style.width; s.style.height = img.style.height; }
+        img.replaceWith(s);
+      };
+      if (img.complete && img.naturalWidth === 0) swap(); else img.addEventListener("error", swap, { once: true });
+    });
   }
   // The small "who's signed in" button for headers.
   function chip(u, ctx, active) {
@@ -170,8 +185,8 @@
       '<span class="hm-why">Connected ' + esc(fmtDay(k.createdAt)) + (k.lastUsedAt ? " · last used " + esc(fmtDay(k.lastUsedAt)) : "") + "</span></span>" +
       (k.current ? '<span class="hm-due">This browser</span>' : '<button type="button" class="pf-link" data-act="key-revoke" data-id="' + esc(k.id) + '">Disconnect</button>') + "</li>").join("");
     return '<div class="hm pf">' +
-      '<div class="pf-head">' + avatar(u, ctx, 52) + '<div class="pf-id"><strong>' + esc(u.name) + '</strong><span class="hm-sub">' + esc(u.email) + "</span>" +
-        '<span class="pf-role">' + (u.isOwner ? "Owner" : "Team member") + "</span></div></div>" +
+      '<div class="pf-head">' + avatar(u, ctx, 32) + '<div class="pf-id"><strong>' + esc(u.name) + '</strong> <span class="hm-sub">' + esc(u.email) +
+        " · " + (u.isOwner ? "Owner" : "Team member") + "</span></div></div>" +
       '<section class="hm-sec" aria-label="Your numbers"><h3>Your month <span class="hm-team">vs last month</span></h3>' +
         '<div class="hm-dials three">' + dial("connections", "Connection requests") + dial("messages", "Messages and emails") + dial("replies", "Replies") +
           dial("meetings", "Meetings") + dial("contactsAdded", "Contacts added") + dial("savedToCrm", "Saved to the CRM") + "</div>" +
@@ -187,6 +202,6 @@
     "</div>";
   }
 
-  const api = { render, renderProfile, chip, avatar, first };
+  const api = { render, renderProfile, chip, avatar, fixAvatars, first };
   if (typeof window !== "undefined") window.RadarHome = api;
 })();

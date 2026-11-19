@@ -160,6 +160,25 @@ extApi.get("/ping", wrap(async (req) => ({ ok: true, user: req.extUser })));
 extApi.get("/lookup", wrap((req) => ext.lookup(as(req), req.query)));
 extApi.get("/home", wrap((req) => ext.home(pool, { me: req.query.scope === "me" ? req.extUser : "" })));
 extApi.get("/me", wrap((req) => ext.me(pool, req.extUser, req.extKeyId, isOwner(req))));
+// Your Google profile photo, fetched by Radar so the extension can show it inside LinkedIn's page
+// (which blocks images from Google's servers). Only Google-hosted photo URLs are fetched.
+extApi.get("/photo", async (req, res) => {
+  try {
+    const r = await pool.query("select photo from radar_users where email = $1", [String(req.extUser || "").toLowerCase()]);
+    let url = r.rows[0] && r.rows[0].photo;
+    let host = "";
+    try { host = new URL(url).hostname; } catch (e) { url = ""; }
+    if (!url || !/(^|\.)googleusercontent\.com$/.test(host)) return res.status(404).json({ error: "No photo." });
+    url = url.replace(/=s\d+(-c)?$/, "=s128-c");
+    const img = await fetch(url, { redirect: "follow" });
+    const type = img.headers.get("content-type") || "";
+    if (!img.ok || !/^image\//.test(type)) return res.status(404).json({ error: "No photo." });
+    const buf = Buffer.from(await img.arrayBuffer());
+    if (buf.length > 1024 * 1024) return res.status(404).json({ error: "No photo." });
+    res.set({ "Content-Type": type, "Cache-Control": "private, max-age=86400" });
+    res.end(buf);
+  } catch (err) { console.error("photo:", err.message); res.status(404).json({ error: "No photo." }); }
+});
 extApi.get("/profile", wrap((req) => ext.profile(pool, req.extUser, req.extKeyId, isOwner(req))));
 // Sign out: revoke the key this browser is using.
 extApi.delete("/key", wrap(async (req) => ({ ok: await ext.revokeOwnKey(pool, req.extUser, req.extKeyId) })));

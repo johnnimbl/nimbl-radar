@@ -16,7 +16,8 @@ async function refresh() {
     return;
   }
   const u = r.data;
-  $("who").innerHTML = (u.photo ? '<img src="' + esc(u.photo) + '" alt="" referrerpolicy="no-referrer">' : '<span class="ini">' + esc(initials(u.name)) + "</span>") +
+  const photo = await chrome.runtime.sendMessage({ type: "photo", email: u.email });
+  $("who").innerHTML = (photo ? '<img src="' + esc(photo) + '" alt="">' : '<span class="ini">' + esc(initials(u.name)) + "</span>") +
     "<div><strong>" + esc(u.name) + (u.isOwner ? '<span class="chip">Owner</span>' : "") + '</strong><span class="help">Signed in as ' + esc(u.email) + "</span></div>";
   $("signedOut").hidden = true; $("signedIn").hidden = false;
 }

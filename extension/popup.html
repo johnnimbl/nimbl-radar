@@ -10,7 +10,7 @@ body { width: 400px; }
 .wrap { padding: 12px 14px 14px; gap: 12px; }
 .top { display: flex; align-items: center; gap: 8px; }
 .top img { width: 26px; height: 26px; }
-.top h1 { font-size: 16px; margin: 0; flex: 1; }
+.top h1 { font-size: 16px; margin: 0; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .btn { padding: 5px 11px; font-size: 12px; }
 .icon { border: 0; background: transparent; font-size: 16px; cursor: pointer; color: var(--ink); min-width: 28px; min-height: 28px; border-radius: 6px; }
 .icon:hover { background: var(--surface-2); }
@@ -20,7 +20,7 @@ body { width: 400px; }
 <main class="wrap">
   <div class="top">
     <img src="icons/icon48.png" alt="">
-    <h1 id="title">Radar home</h1>
+    <h1 id="title">Home</h1>
     <span id="chip"></span>
     <button class="icon" id="reload" type="button" title="Refresh" aria-label="Refresh">↻</button>
     <button class="btn btn-primary" id="open" type="button">Open Radar</button>
