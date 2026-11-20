@@ -18,7 +18,7 @@ function cleanContent(c) {
 
 function toJson(r) {
   return {
-    id: r.id, leadId: r.lead_id, status: r.status, sourceUrl: r.source_url, sourceText: r.source_text,
+    id: r.id, leadId: r.lead_id, roleAlertId: r.role_alert_id || "", status: r.status, sourceUrl: r.source_url, sourceText: r.source_text,
     content: cleanContent(r.content), showClient: r.show_client, clientLabel: r.client_label,
     contactEmail: r.contact_email, contactPhone: r.contact_phone, createdBy: r.created_by || "",
     createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(),
@@ -37,11 +37,22 @@ async function getJd(pool, id) {
   return Object.assign(toJson(res.rows[0]), { company: res.rows[0].company });
 }
 
+// body.roleAlertId names the role it's for: "" is the role the company was saved with. Without it
+// (the Chrome extension, older clients) the posting link decides: a link matching a role found since goes there.
 async function createJd(pool, leadId, body, defaults) {
+  const url = str(body.sourceUrl, 1000).trim();
+  let roleAlertId = null;
+  if (body.roleAlertId) {
+    const r = await pool.query("select id from role_alerts where id = $1 and lead_id = $2", [String(body.roleAlertId), String(leadId)]);
+    roleAlertId = r.rows.length ? r.rows[0].id : null;
+  } else if (!("roleAlertId" in body) && url) {
+    const r = await pool.query("select id from role_alerts where lead_id = $1 and job_url = $2 order by found_at desc limit 1", [String(leadId), url]);
+    roleAlertId = r.rows.length ? r.rows[0].id : null;
+  }
   const res = await pool.query(
-    `insert into job_descriptions (lead_id, source_url, source_text, contact_email, contact_phone)
-     values ($1, $2, $3, $4, $5) returning *`,
-    [String(leadId), str(body.sourceUrl, 1000).trim(), str(body.sourceText, 60000),
+    `insert into job_descriptions (lead_id, role_alert_id, source_url, source_text, contact_email, contact_phone)
+     values ($1, $2, $3, $4, $5, $6) returning *`,
+    [String(leadId), roleAlertId, url, str(body.sourceText, 60000),
       str(body.contactEmail || defaults.email, 200).trim(), str(body.contactPhone, 60).trim()]
   );
   return toJson(res.rows[0]);

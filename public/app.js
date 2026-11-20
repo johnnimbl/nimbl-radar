@@ -1038,50 +1038,92 @@
     '</div>';
   }
 
-  function renderJdPanel(l) {
-    var list = leadJds(l.id);
-    var rows = list.map(function (j) {
-      var ready = j.status === "ready";
-      var pdf = "/api/job-descriptions/" + encodeURIComponent(j.id) + "/pdf";
-      var dirty = jdEdits[j.id] && Object.keys(jdEdits[j.id]).length;
-      return '<div class="jd-item">' +
-        '<div class="jd-row">' +
-          '<span class="jd-title">' + escapeHtml(jdTitle(j)) + '</span>' +
-          '<span class="jd-chip ' + (ready ? 'jd-ready' : 'jd-wait') + '">' + (ready ? 'Ready' : 'Waiting for Claude') + '</span>' +
-          (dirty ? '<span class="jd-chip jd-wait">Unsaved</span>' : '') +
-          byHtml(j.createdBy) +
-        '</div>' +
-        '<div class="jd-row jd-btns">' +
-          (ready ? '<a class="btn btn-sm btn-primary" href="' + pdf + '?download=1" data-action="jd-download">Download PDF</a><a class="btn-link" href="' + pdf + '" target="_blank" rel="noopener">Preview ↗</a>' : '') +
-          '<button type="button" class="btn-link" data-action="jd-toggle" data-jid="' + j.id + '">' + (jdOpen[j.id] ? 'Hide' : (readOnly ? 'View' : 'Edit')) + '</button>' +
-          (readOnly ? '' : '<button type="button" class="btn-link jd-del" data-action="jd-delete" data-jid="' + j.id + '">Delete</button>') +
-        '</div>' +
-        (jdOpen[j.id] ? renderJdEditor(l, j) : '') +
-      '</div>';
-    }).join("");
-    var form = '';
-    if (!readOnly) {
-      form = jdNew[l.id]
-        ? '<div class="jd-new">' +
-            '<label class="jd-f"><span>Job posting link</span><input type="url" id="jd-new-url-' + l.id + '" value="' + escapeHtml(l.jobUrl || "") + '" placeholder="https://…"></label>' +
-            '<label class="jd-f"><span>Or paste the full job description</span><textarea rows="7" id="jd-new-text-' + l.id + '" placeholder="Paste the posting here. Pasted text works best: some job sites can\'t be read from a link."></textarea></label>' +
-            '<div class="jd-actions"><button type="button" class="btn btn-sm btn-primary" data-action="jd-create" data-id="' + l.id + '">Save for Claude</button>' +
-            '<button type="button" class="btn-link" data-action="jd-new-cancel" data-id="' + l.id + '">Cancel</button></div>' +
-            '<p class="help">Then ask Claude in chat to do the job description for ' + escapeHtml(l.company) + '. It comes back here ready to download on the Nimbl letterhead.</p>' +
-          '</div>'
-        : '<button type="button" class="btn btn-sm" data-action="jd-new" data-id="' + l.id + '">+ Job description</button>';
-    }
-    return '<div class="jd-panel">' + (rows || (readOnly ? '<p class="help">No job descriptions yet.</p>' : '')) + form + '</div>';
+  // Each job description belongs to one of the company's roles: "" is the role the company was saved
+  // with, otherwise the id of a role found since. One whose role has gone falls back to "".
+  function jdRoleKey(l, j) {
+    var k = j.roleAlertId || "";
+    return k && (l.roleAlerts || []).some(function (a) { return a.id === k; }) ? k : "";
+  }
+  // "Posted Oct 18, 2026 · 33d ago", shown beside a role's own posting link.
+  function postedHtml(date) {
+    if (!date) return '';
+    var rd = daysSince(date);
+    return '<span class="posted-on">Posted ' + fmtDate(date) + (rd !== null ? ' · ' + rd + 'd ago' : '') + '</span>';
+  }
+  function jdFormKey(leadId, roleKey) { return leadId + "|" + (roleKey || ""); }
+  function jdDomId(leadId, roleKey) { return (leadId + "-" + (roleKey || "main")).replace(/[^A-Za-z0-9_-]/g, "_"); }
+
+  function renderJdRow(l, j) {
+    var ready = j.status === "ready";
+    var pdf = "/api/job-descriptions/" + encodeURIComponent(j.id) + "/pdf";
+    var dirty = jdEdits[j.id] && Object.keys(jdEdits[j.id]).length;
+    return '<div class="jd-item">' +
+      '<div class="jd-row">' +
+        '<span class="jd-title">' + escapeHtml(jdTitle(j)) + '</span>' +
+        '<span class="jd-chip ' + (ready ? 'jd-ready' : 'jd-wait') + '">' + (ready ? 'Ready' : 'Waiting for Claude') + '</span>' +
+        (dirty ? '<span class="jd-chip jd-wait">Unsaved</span>' : '') +
+        byHtml(j.createdBy) +
+      '</div>' +
+      '<div class="jd-row jd-btns">' +
+        (ready ? '<a class="btn btn-sm btn-primary" href="' + pdf + '?download=1" data-action="jd-download">Download PDF</a><a class="btn-link" href="' + pdf + '" target="_blank" rel="noopener">Preview ↗</a>' : '') +
+        '<button type="button" class="btn-link" data-action="jd-toggle" data-jid="' + j.id + '">' + (jdOpen[j.id] ? 'Hide' : (readOnly ? 'View' : 'Edit')) + '</button>' +
+        (readOnly ? '' : '<button type="button" class="btn-link jd-del" data-action="jd-delete" data-jid="' + j.id + '">Delete</button>') +
+      '</div>' +
+      (jdOpen[j.id] ? renderJdEditor(l, j) : '') +
+    '</div>';
   }
 
-  function createJd(leadId) {
-    var url = (document.getElementById("jd-new-url-" + leadId) || {}).value || "";
-    var text = (document.getElementById("jd-new-text-" + leadId) || {}).value || "";
+  // The button that sits next to a role's own "Job posting" link.
+  function renderJdButton(l, roleKey) {
+    if (readOnly || jdNew[jdFormKey(l.id, roleKey)]) return '';
+    return '<button type="button" class="btn btn-sm jd-make" data-action="jd-new" data-id="' + l.id + '" data-role="' + escapeHtml(roleKey || "") + '">+ Nimbl job description</button>';
+  }
+
+  // Under a role: its job descriptions, then the new-description form when it's open.
+  function renderRoleJds(l, roleKey, jobUrl) {
+    var list = leadJds(l.id).filter(function (j) { return jdRoleKey(l, j) === (roleKey || ""); });
+    var fk = jdFormKey(l.id, roleKey), dom = jdDomId(l.id, roleKey);
+    var form = !readOnly && jdNew[fk]
+      ? '<div class="jd-new">' +
+          '<label class="jd-f"><span>Job posting link</span><input type="url" id="jd-new-url-' + dom + '" value="' + escapeHtml(jobUrl || "") + '" placeholder="https://…"></label>' +
+          '<label class="jd-f"><span>Or paste the full job description</span><textarea rows="7" id="jd-new-text-' + dom + '" placeholder="Paste the posting here. Pasted text works best: some job sites can\'t be read from a link."></textarea></label>' +
+          '<div class="jd-actions"><button type="button" class="btn btn-sm btn-primary" data-action="jd-create" data-id="' + l.id + '" data-role="' + escapeHtml(roleKey || "") + '">Save for Claude</button>' +
+          '<button type="button" class="btn-link" data-action="jd-new-cancel" data-id="' + l.id + '" data-role="' + escapeHtml(roleKey || "") + '">Cancel</button></div>' +
+          '<p class="help">Then ask Claude in chat to do the job description for ' + escapeHtml(l.company) + '. It comes back here ready to download on the Nimbl letterhead.</p>' +
+        '</div>'
+      : '';
+    if (!list.length && !form) return '';
+    return '<div class="jd-panel jd-for-role">' + list.map(function (j) { return renderJdRow(l, j); }).join("") + form + '</div>';
+  }
+
+  // Lead detail (pipeline view): every role with its posting link, button and job descriptions.
+  function renderJdPanel(l) {
+    var roles = [{ key: "", title: l.jobTitle || "Open role", url: l.jobUrl, date: l.datePosted }].concat((l.roleAlerts || []).map(function (a) {
+      return { key: a.id, title: a.jobTitle || a.roleType || "New opening", url: a.jobUrl, date: a.datePosted };
+    }));
+    var blocks = roles.map(function (r) {
+      var jdsHtml = renderRoleJds(l, r.key, r.url);
+      if (readOnly && !jdsHtml) return '';
+      return '<div class="jd-role">' +
+        '<div class="jd-role-head"><strong>' + escapeHtml(r.title) + '</strong>' +
+          (r.url ? '<a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') +
+          postedHtml(r.date) +
+          renderJdButton(l, r.key) +
+        '</div>' + jdsHtml +
+      '</div>';
+    }).join("");
+    return '<div class="jd-panel">' + (blocks || '<p class="help">No job descriptions yet.</p>') + '</div>';
+  }
+
+  function createJd(leadId, roleKey) {
+    var dom = jdDomId(leadId, roleKey);
+    var url = (document.getElementById("jd-new-url-" + dom) || {}).value || "";
+    var text = (document.getElementById("jd-new-text-" + dom) || {}).value || "";
     if (!url.trim() && !text.trim()) { toast("Add a link or paste the job description first."); return; }
-    jdApi("POST", "/api/leads/" + encodeURIComponent(leadId) + "/job-descriptions", { sourceUrl: url.trim(), sourceText: text, contactPhone: lastPhone() })
+    jdApi("POST", "/api/leads/" + encodeURIComponent(leadId) + "/job-descriptions", { sourceUrl: url.trim(), sourceText: text, contactPhone: lastPhone(), roleAlertId: roleKey || "" })
       .then(function (j) {
         if (!j) return;
-        jds.push(j); jdNew[leadId] = false;
+        jds.push(j); jdNew[jdFormKey(leadId, roleKey)] = false;
         render();
         toast("Saved. Ask Claude in chat to write it up.");
       })
@@ -2029,14 +2071,19 @@
     });
   }
 
-  function renderAlertLine(l, a, withButton) {
+  function renderAlertLine(l, a, withButton, withJds) {
     var rd = a.datePosted ? daysSince(a.datePosted) : null;
     return '<div class="nr-item">' +
       '<div class="nr-main"><strong>' + escapeHtml(a.jobTitle || a.roleType || "New opening") + '</strong>' +
         (a.roleType ? '<span class="role-tag">' + escapeHtml(a.roleType) + '</span>' : '') +
-        '<div class="nr-meta">' + (rd !== null ? 'Posted ' + rd + 'd ago · ' : '') + 'found ' + fmtDate(a.foundAt) +
-          (a.jobUrl ? ' · <a href="' + escapeHtml(a.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') + '</div>' +
+        '<div class="nr-meta">' + (rd !== null && !withJds ? 'Posted ' + rd + 'd ago · ' : '') + 'found ' + fmtDate(a.foundAt) +
+          (a.jobUrl && !withJds ? ' · <a href="' + escapeHtml(a.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') + '</div>' +
         (a.note ? '<div class="nr-note">' + escapeHtml(a.note) + '</div>' : '') +
+        (withJds && (a.jobUrl || a.datePosted || renderJdButton(l, a.id)) ? '<div class="links role-links">' +
+          (a.jobUrl ? '<a href="' + escapeHtml(a.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') +
+          postedHtml(a.datePosted) +
+          renderJdButton(l, a.id) + '</div>' : '') +
+        (withJds ? renderRoleJds(l, a.id, a.jobUrl) : '') +
       '</div>' +
       (withButton && !readOnly ? '<button type="button" class="btn btn-sm" data-action="alert-seen" data-id="' + l.id + '" data-aid="' + escapeHtml(a.id) + '">Mark as seen</button>' : '') +
     '</div>';
@@ -2390,7 +2437,6 @@
     var fit = cardMore ? (l.nearshoreFit || "—") : shortText(l.nearshoreFit, 200);
     var skills = cardMore ? (l.requiredSkills || "") : shortText(l.requiredSkills, 140);
     var hasMore = (l.companyProfile || "").length > 230 || (l.nearshoreFit || "").length > 200 || (l.requiredSkills || "").length > 140;
-    var rd = daysSince(l.datePosted);
     var company = '' +
       '<section class="cc-sec"><h3>Company</h3>' +
         '<p class="cc-text">' + escapeHtml(profile) + '</p>' +
@@ -2410,13 +2456,15 @@
         '<div class="role-line"><strong>' + escapeHtml(l.jobTitle || "—") + '</strong>' + (l.roleType ? '<span class="role-tag">' + escapeHtml(l.roleType) + '</span>' : '') + '</div>' +
         '<div class="cc-facts">' +
           (l.employmentType ? '<span>' + escapeHtml(l.employmentType) + '</span>' : '') +
-          (rd !== null ? '<span>Posted ' + rd + 'd ago</span>' : '') +
         '</div>' +
         (skills ? '<p class="cc-text">' + escapeHtml(skills) + '</p>' : '') +
-        '<div class="links">' +
+        '<div class="links role-links">' +
           (l.jobUrl ? '<a href="' + escapeHtml(l.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') +
+          postedHtml(l.datePosted) +
+          renderJdButton(l, "") +
         '</div>' +
-        ((l.roleAlerts || []).length ? '<h4>Found since</h4><div class="nr-list">' + l.roleAlerts.map(function (a) { return renderAlertLine(l, a, false); }).join("") + '</div>' : '') +
+        renderRoleJds(l, "", l.jobUrl) +
+        ((l.roleAlerts || []).length ? '<h4>Found since</h4><div class="nr-list">' + l.roleAlerts.map(function (a) { return renderAlertLine(l, a, false, true); }).join("") + '</div>' : '') +
       '</section>';
 
     var isWon = l.status === "Won";
@@ -2447,7 +2495,6 @@
             renderHistory(l) +
           '</div>' +
           '<aside class="cc-side">' + company +
-            '<section class="cc-sec"><h3>Job descriptions</h3>' + renderJdPanel(l) + '</section>' +
             '<section class="cc-sec"><h3>Client info</h3>' + renderClientInfoPanel(l).replace('<h4>Client info</h4>', '') + '</section>' +
             '<section class="cc-sec"><h3>Documents</h3>' + renderDocumentsPanel(l).replace('<h4>Documents</h4>', '') + '</section>' +
           '</aside>' +
@@ -3290,9 +3337,9 @@
     }
     if (action === "backup-run") { runBackupNow(); return; }
     if (action === "backup-disconnect") { disconnectBackup(); return; }
-    if (action === "jd-new") { jdNew[id] = true; render(); var nu = document.getElementById("jd-new-text-" + id); if (nu) nu.focus(); return; }
-    if (action === "jd-new-cancel") { jdNew[id] = false; render(); return; }
-    if (action === "jd-create") { createJd(id); return; }
+    if (action === "jd-new") { var nr = t.getAttribute("data-role") || ""; jdNew[jdFormKey(id, nr)] = true; render(); var nu = document.getElementById("jd-new-text-" + jdDomId(id, nr)); if (nu) nu.focus(); return; }
+    if (action === "jd-new-cancel") { jdNew[jdFormKey(id, t.getAttribute("data-role") || "")] = false; render(); return; }
+    if (action === "jd-create") { createJd(id, t.getAttribute("data-role") || ""); return; }
     if (action === "jd-toggle") { var tj = t.getAttribute("data-jid"); jdOpen[tj] = !jdOpen[tj]; render(); return; }
     if (action === "jd-close") { jdOpen[t.getAttribute("data-jid")] = false; render(); return; }
     if (action === "jd-save") { saveJd(t.getAttribute("data-jid"), t.getAttribute("data-value") || ""); return; }

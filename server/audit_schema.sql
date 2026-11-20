@@ -28,6 +28,10 @@ alter table if exists lead_notes alter column author set default radar_actor();
 alter table if exists contacts alter column added_by set default radar_actor();
 alter table if exists job_descriptions alter column created_by set default radar_actor();
 
+-- Which role a job description was written for: a role found since (role_alerts), or null for the
+-- role the company was saved with. If that alert is ever removed, the description falls back to the company.
+alter table if exists job_descriptions add column if not exists role_alert_id text references role_alerts (id) on delete set null;
+
 create or replace function radar_audit() returns trigger language plpgsql set search_path = public as $$
 declare
   a text := radar_actor();

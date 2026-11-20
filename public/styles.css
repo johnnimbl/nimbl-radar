@@ -628,3 +628,14 @@ th.cl-col-last{white-space:nowrap;}
 .hist-what{overflow-wrap:anywhere;}
 .hist-when{font-size:.7rem;color:var(--ink-soft);white-space:nowrap;font-variant-numeric:tabular-nums;}
 @media (max-width:560px){.hist-list li{grid-template-columns:1fr auto;}.hist-what{grid-column:1 / -1;grid-row:2;}}
+
+/* Job descriptions sit under the role they were written for */
+.role-links{align-items:center;}
+.jd-make{padding:3px 10px;font-size:.78rem;}
+.jd-for-role{margin-top:8px;}
+.nr-main{min-width:0;flex:1 1 auto;}
+.jd-role{display:flex;flex-direction:column;gap:6px;padding-bottom:10px;border-bottom:1px solid rgba(13,1,41,.14);}
+.jd-role:last-child{border-bottom:0;padding-bottom:0;}
+.jd-role-head{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;font-size:.88rem;}
+.jd-role-head a{font-size:.82rem;}
+.posted-on{color:var(--ink-soft);font-size:.8rem;}
