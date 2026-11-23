@@ -639,3 +639,12 @@ th.cl-col-last{white-space:nowrap;}
 .jd-role-head{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;font-size:.88rem;}
 .jd-role-head a{font-size:.82rem;}
 .posted-on{color:var(--ink-soft);font-size:.8rem;}
+
+/* Role state on company cards */
+.role-state{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:999px;font-size:.68rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;vertical-align:2px;}
+.role-stale{border:1px solid #b7791f;color:#8a5a12;background:#fff7e6;}
+.role-closed{border:1px solid var(--ink-soft);color:var(--ink-soft);}
+.nr-closed strong{color:var(--ink-soft);}
+.role-act{font-size:.8rem;}
+.closed-roles{margin-top:12px;}
+.closed-roles .nr-list{margin-top:8px;}

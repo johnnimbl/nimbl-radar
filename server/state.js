@@ -53,7 +53,7 @@ async function getState(pool) {
     ? await pool.query("select * from candidates where lead_id = any($1) order by sort_order, id", [leadIds])
     : { rows: [] };
   const alertsRes = leadIds.length
-    ? await pool.query("select * from role_alerts where lead_id = any($1) order by found_at desc, id", [leadIds])
+    ? await pool.query("select * from role_alerts where lead_id = any($1) and promoted_at is null order by found_at desc, id", [leadIds])
     : { rows: [] };
   const alertsByLead = groupBy(alertsRes.rows, "lead_id");
   const draftsRes = leadIds.length
@@ -90,6 +90,7 @@ async function getState(pool) {
     jobTitle: l.job_title || "",
     jobUrl: l.job_url || "",
     datePosted: dateOrEmpty(l.date_posted),
+    jobClosedAt: dateOrEmpty(l.job_closed_at),
     dateAdded: dateOrEmpty(l.date_added),
     employmentType: l.employment_type || "",
     estSize: l.est_size || "",
@@ -110,7 +111,7 @@ async function getState(pool) {
     roleAlerts: (alertsByLead[l.id] || []).map((a) => ({
       id: a.id, roleType: a.role_type || "", jobTitle: a.job_title || "", jobUrl: a.job_url || "",
       datePosted: dateOrEmpty(a.date_posted), note: a.note || "",
-      foundAt: a.found_at.toISOString().slice(0, 10), seen: !!a.seen_at,
+      foundAt: a.found_at.toISOString().slice(0, 10), seen: !!a.seen_at, closedAt: dateOrEmpty(a.closed_at),
     })),
     contacts: (contactsByLead[l.id] || []).map((c) => ({
       id: c.id, name: c.name || "", title: c.title || "", email: c.email || "",

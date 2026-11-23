@@ -1098,14 +1098,14 @@
 
   // Lead detail (pipeline view): every role with its posting link, button and job descriptions.
   function renderJdPanel(l) {
-    var roles = [{ key: "", title: l.jobTitle || "Open role", url: l.jobUrl, date: l.datePosted }].concat((l.roleAlerts || []).map(function (a) {
-      return { key: a.id, title: a.jobTitle || a.roleType || "New opening", url: a.jobUrl, date: a.datePosted };
+    var roles = [{ key: "", title: l.jobTitle || "Open role", url: l.jobUrl, date: l.datePosted, closed: l.jobClosedAt }].concat((l.roleAlerts || []).map(function (a) {
+      return { key: a.id, title: a.jobTitle || a.roleType || "New opening", url: a.jobUrl, date: a.datePosted, closed: a.closedAt };
     }));
     var blocks = roles.map(function (r) {
       var jdsHtml = renderRoleJds(l, r.key, r.url);
       if (readOnly && !jdsHtml) return '';
       return '<div class="jd-role">' +
-        '<div class="jd-role-head"><strong>' + escapeHtml(r.title) + '</strong>' +
+        '<div class="jd-role-head"><strong>' + escapeHtml(r.title) + '</strong>' + roleStateChip({ closedAt: r.closed, datePosted: r.date }) +
           (r.url ? '<a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') +
           postedHtml(r.date) +
           renderJdButton(l, r.key) +
@@ -1654,20 +1654,31 @@
       }
     });
 
-    // 3. New roles posted at CRM companies
+    // 3. New roles posted at CRM companies: one move per company, however many roles came in,
+    // with the one message that covers them all.
     crmLeads().forEach(function (l) {
       if (!leadsInView[l.id] && (l.contacts || []).length) return;
-      unseenAlerts(l).forEach(function (a) {
-        var target = firstContact(l);
-        var touched = (l.contacts || []).filter(function (c) { return (c.stage || "Not contacted") !== "Not contacted" && c.stage !== "Not interested"; });
-        if (touched.length) target = touched.sort(function (x, y) { return (y.lastContacted || "").localeCompare(x.lastContacted || ""); })[0];
-        var draft = leadDrafts(l, "reengage").filter(function (d) { return d.meta && d.meta.alertId === a.id; })[0] || null;
-        moves.push({ key: "alert-" + a.id, kind: "alert", lead: l, contact: target || null, owner: target ? "both" : "agent",
-          score: 80 + prioBoost(l), alert: a, draft: draft,
-          action: target ? "Re-engage " + (target.name || "your contact") + " about the new " + (a.jobTitle || a.roleType) + " role" : "Find who to contact about the new " + (a.jobTitle || a.roleType) + " role",
-          why: l.company + " posted a new role" + (a.datePosted ? " " + agoText(a.datePosted) : "") + ". A fresh opening is the easiest reason to get back in touch.",
-          badge: '<span class="due-badge due-overdue">New role</span>', logLabel: "Log" });
-      });
+      var fresh = unseenAlerts(l);
+      if (!fresh.length) return;
+      var target = firstContact(l);
+      var touched = (l.contacts || []).filter(function (c) { return (c.stage || "Not contacted") !== "Not contacted" && c.stage !== "Not interested"; });
+      if (touched.length) target = touched.sort(function (x, y) { return (y.lastContacted || "").localeCompare(x.lastContacted || ""); })[0];
+      var ids = fresh.map(function (a) { return a.id; });
+      var covers = function (d) {
+        var m = d.meta || {};
+        return (m.alertIds || []).some(function (x) { return ids.indexOf(x) !== -1; }) || ids.indexOf(m.alertId) !== -1;
+      };
+      var drafts = leadDrafts(l, "reengage").filter(function (d) { return covers(d) && (!target || !d.contactId || d.contactId === target.id); });
+      drafts.sort(function (x, y) { return ((y.meta && y.meta.alertIds) || []).length - ((x.meta && x.meta.alertIds) || []).length || String(y.createdAt).localeCompare(String(x.createdAt)); });
+      var titles = fresh.map(function (a) { return a.jobTitle || a.roleType || "new"; });
+      var what = fresh.length === 1 ? "the new " + titles[0] + " role"
+        : fresh.length + " new roles (" + titles.slice(0, 3).join(", ") + (fresh.length > 3 ? " and " + (fresh.length - 3) + " more" : "") + ")";
+      var newest = fresh.map(function (a) { return a.datePosted; }).filter(Boolean).sort().pop();
+      moves.push({ key: "alerts-" + l.id, kind: "alert", lead: l, contact: target || null, owner: target ? "both" : "agent",
+        score: 80 + prioBoost(l), alert: fresh[0], draft: drafts[0] || null,
+        action: target ? "Re-engage " + (target.name || "your contact") + " about " + what : "Find who to contact about " + what,
+        why: l.company + (fresh.length === 1 ? " posted a new role" : " posted " + fresh.length + " new roles") + (newest ? ", the latest " + agoText(newest) : "") + ". Fresh openings are the easiest reason to get back in touch.",
+        badge: '<span class="due-badge due-overdue">' + (fresh.length === 1 ? 'New role' : fresh.length + ' new roles') + '</span>', logLabel: "Log" });
     });
 
     // 4. Companies gone quiet: reach a second person
@@ -2052,7 +2063,108 @@
   function crmLeads() { return state.leads.filter(function (l) { return l.inCrm; }); }
 
   // New openings the daily scan found at a company that is already in the CRM.
-  function unseenAlerts(l) { return (l.roleAlerts || []).filter(function (a) { return !a.seen; }); }
+  function unseenAlerts(l) { return (l.roleAlerts || []).filter(function (a) { return !a.seen && !a.closedAt; }); }
+
+  // Roles: the one a company was saved with, plus roles found since. A posting older than this is
+  // probably closed, so it's flagged and moved below the fresher roles until someone checks it.
+  var STALE_ROLE_DAYS = 60;
+  var rolesClosedOpen = {};            // lead id -> "Closed roles" list expanded
+  function roleStale(date) { var d = date ? daysSince(date) : null; return d !== null && d > STALE_ROLE_DAYS; }
+  function mainRoleAsAlert(l) {
+    return { id: "", isMain: true, jobTitle: l.jobTitle, roleType: l.roleType, jobUrl: l.jobUrl, datePosted: l.datePosted,
+      note: l.employmentType, foundAt: l.dateAdded, closedAt: l.jobClosedAt };
+  }
+  function roleStateChip(a) {
+    if (a.closedAt) return '<span class="role-state role-closed">Closed</span>';
+    if (roleStale(a.datePosted)) return '<span class="role-state role-stale">Probably closed</span>';
+    return '';
+  }
+  function roleActions(l, a) {
+    if (readOnly) return '';
+    var key = escapeHtml(a.id || "");
+    return (!a.isMain && !a.closedAt ? '<button type="button" class="btn-link role-act" data-action="role-promote" data-id="' + l.id + '" data-role="' + key + '">Make main role</button>' : '') +
+      '<button type="button" class="btn-link role-act" data-action="role-close" data-id="' + l.id + '" data-role="' + key + '" data-value="' + (a.closedAt ? '0' : '1') + '">' + (a.closedAt ? 'Reopen' : 'Mark closed') + '</button>';
+  }
+
+  function setRoleClosed(leadId, key, closed) {
+    var l = findLead(leadId);
+    if (!l) return;
+    var target = key ? (l.roleAlerts || []).filter(function (a) { return a.id === key; })[0] : null;
+    if (key && !target) return;
+    var before = key ? target.closedAt : l.jobClosedAt;
+    var now = closed ? todayStr() : "";
+    if (key) target.closedAt = now; else l.jobClosedAt = now;
+    if (closed && target) target.seen = true;
+    render();
+    fetch("/api/leads/" + encodeURIComponent(leadId) + "/roles/closed", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alertId: key || "", closed: closed }),
+    }).then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      toast(closed ? "Marked as closed." : "Reopened.");
+    }).catch(function (err) {
+      if (key) target.closedAt = before; else l.jobClosedAt = before;
+      render();
+      toast("Couldn't update the role: " + (err && err.message ? err.message : "unknown error"));
+    });
+  }
+
+  function promoteRole(leadId, key) {
+    if (pendingSave) { toast("Saving your changes first. Try again in a moment."); return; }
+    fetch("/api/leads/" + encodeURIComponent(leadId) + "/roles/promote", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alertId: key }),
+    }).then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return null; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return fetch("/api/state").then(function (r) { return r.ok ? r.json() : null; });
+    }).then(function (fresh) {
+      if (!fresh) return;
+      state = fresh; loadJds(); render();
+      toast("Main role changed. The old one is kept under the company's roles.");
+    }).catch(function (err) {
+      toast("Couldn't change the main role: " + (err && err.message ? err.message : "unknown error"));
+    });
+  }
+
+  function renderRolesSection(l, skills) {
+    var alerts = l.roleAlerts || [];
+    var byNewest = function (a, b) { return String(b.datePosted || b.foundAt || "").localeCompare(String(a.datePosted || a.foundAt || "")); };
+    var open = alerts.filter(function (a) { return !a.closedAt; }).sort(byNewest);
+    var closed = alerts.filter(function (a) { return a.closedAt; }).sort(byNewest);
+    var hasMain = !!(l.jobTitle || l.jobUrl);
+    var main = mainRoleAsAlert(l);
+    var mainClosed = hasMain && !!l.jobClosedAt;
+    var mainStale = hasMain && !mainClosed && roleStale(l.datePosted);
+    var mainFull = hasMain && !mainClosed && !mainStale;
+    var line = function (a) { return renderAlertLine(l, a, false, true); };
+    var html = '';
+    if (mainFull) {
+      html += (alerts.length ? '<h4 style="margin-top:0">When you saved it</h4>' : '') +
+        '<div class="role-line"><strong>' + escapeHtml(l.jobTitle || "—") + '</strong>' + (l.roleType ? '<span class="role-tag">' + escapeHtml(l.roleType) + '</span>' : '') + '</div>' +
+        '<div class="cc-facts">' + (l.employmentType ? '<span>' + escapeHtml(l.employmentType) + '</span>' : '') + '</div>' +
+        (skills ? '<p class="cc-text">' + escapeHtml(skills) + '</p>' : '') +
+        '<div class="links role-links">' +
+          (l.jobUrl ? '<a href="' + escapeHtml(l.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') +
+          postedHtml(l.datePosted) + renderJdButton(l, "") + roleActions(l, main) +
+        '</div>' +
+        renderRoleJds(l, "", l.jobUrl);
+    }
+    if (open.length) {
+      html += '<h4' + (mainFull ? '' : ' style="margin-top:0"') + '>' + (mainFull ? 'Found since' : 'Open roles') + '</h4>' +
+        '<div class="nr-list">' + open.map(line).join("") + '</div>';
+    }
+    if (mainStale) html += '<h4>When you saved it</h4><div class="nr-list">' + line(main) + '</div>';
+    if (!mainFull && !open.length && !mainStale) html += '<p class="help" style="margin-top:0">No open roles right now.</p>';
+    var closedList = (mainClosed ? [main] : []).concat(closed);
+    if (closedList.length) {
+      var shown = !!rolesClosedOpen[l.id];
+      html += '<div class="closed-roles"><button type="button" class="btn-link" data-action="roles-closed-toggle" data-id="' + l.id + '">' +
+        (shown ? 'Hide closed roles' : 'Closed roles (' + closedList.length + ')') + '</button>' +
+        (shown ? '<div class="nr-list">' + closedList.map(line).join("") + '</div>' : '') + '</div>';
+    }
+    var count = (hasMain ? 1 : 0) + alerts.length;
+    return '<section class="cc-sec"><h3>' + (count > 1 ? 'Roles' : 'Open role') + '</h3>' + html + '</section>';
+  }
   function crmAlertCount() {
     return crmLeads().reduce(function (n, l) { return n + unseenAlerts(l).length; }, 0);
   }
@@ -2073,16 +2185,18 @@
 
   function renderAlertLine(l, a, withButton, withJds) {
     var rd = a.datePosted ? daysSince(a.datePosted) : null;
-    return '<div class="nr-item">' +
+    return '<div class="nr-item' + (a.closedAt && withJds ? ' nr-closed' : '') + '">' +
       '<div class="nr-main"><strong>' + escapeHtml(a.jobTitle || a.roleType || "New opening") + '</strong>' +
         (a.roleType ? '<span class="role-tag">' + escapeHtml(a.roleType) + '</span>' : '') +
-        '<div class="nr-meta">' + (rd !== null && !withJds ? 'Posted ' + rd + 'd ago · ' : '') + 'found ' + fmtDate(a.foundAt) +
+        (withJds ? roleStateChip(a) : '') +
+        '<div class="nr-meta">' + (rd !== null && !withJds ? 'Posted ' + rd + 'd ago · ' : '') + (a.isMain ? 'saved ' : 'found ') + fmtDate(a.foundAt) +
+          (a.closedAt && withJds ? ' · closed ' + fmtDate(a.closedAt) : '') +
           (a.jobUrl && !withJds ? ' · <a href="' + escapeHtml(a.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') + '</div>' +
         (a.note ? '<div class="nr-note">' + escapeHtml(a.note) + '</div>' : '') +
-        (withJds && (a.jobUrl || a.datePosted || renderJdButton(l, a.id)) ? '<div class="links role-links">' +
+        (withJds && (a.jobUrl || a.datePosted || !readOnly) ? '<div class="links role-links">' +
           (a.jobUrl ? '<a href="' + escapeHtml(a.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') +
           postedHtml(a.datePosted) +
-          renderJdButton(l, a.id) + '</div>' : '') +
+          (a.closedAt ? '' : renderJdButton(l, a.id)) + roleActions(l, a) + '</div>' : '') +
         (withJds ? renderRoleJds(l, a.id, a.jobUrl) : '') +
       '</div>' +
       (withButton && !readOnly ? '<button type="button" class="btn btn-sm" data-action="alert-seen" data-id="' + l.id + '" data-aid="' + escapeHtml(a.id) + '">Mark as seen</button>' : '') +
@@ -2451,21 +2565,7 @@
         (fit ? '<h4>Nearshore fit</h4><p class="cc-text">' + escapeHtml(fit) + '</p>' : '') +
         (hasMore ? '<button type="button" class="btn-link" data-action="card-more">' + (cardMore ? 'Show less' : 'Show full details') + '</button>' : '') +
       '</section>' +
-      '<section class="cc-sec"><h3>' + ((l.roleAlerts || []).length ? 'Roles' : 'Open role') + '</h3>' +
-        ((l.roleAlerts || []).length ? '<h4 style="margin-top:0">When you saved it</h4>' : '') +
-        '<div class="role-line"><strong>' + escapeHtml(l.jobTitle || "—") + '</strong>' + (l.roleType ? '<span class="role-tag">' + escapeHtml(l.roleType) + '</span>' : '') + '</div>' +
-        '<div class="cc-facts">' +
-          (l.employmentType ? '<span>' + escapeHtml(l.employmentType) + '</span>' : '') +
-        '</div>' +
-        (skills ? '<p class="cc-text">' + escapeHtml(skills) + '</p>' : '') +
-        '<div class="links role-links">' +
-          (l.jobUrl ? '<a href="' + escapeHtml(l.jobUrl) + '" target="_blank" rel="noopener">Job posting ↗</a>' : '') +
-          postedHtml(l.datePosted) +
-          renderJdButton(l, "") +
-        '</div>' +
-        renderRoleJds(l, "", l.jobUrl) +
-        ((l.roleAlerts || []).length ? '<h4>Found since</h4><div class="nr-list">' + l.roleAlerts.map(function (a) { return renderAlertLine(l, a, false, true); }).join("") + '</div>' : '') +
-      '</section>';
+      renderRolesSection(l, skills);
 
     var isWon = l.status === "Won";
     inClientCard = true;
@@ -3315,6 +3415,9 @@
     if (action === "board-more") { var bs = t.getAttribute("data-value"); boardMore[bs] = !boardMore[bs]; render(); return; }
     if (action === "recent-more") { recentAll = !recentAll; render(); return; }
     if (action === "alert-seen") { markAlertsSeen(id, t.getAttribute("data-aid")); return; }
+    if (action === "role-close") { setRoleClosed(id, t.getAttribute("data-role") || "", t.getAttribute("data-value") === "1"); return; }
+    if (action === "role-promote") { promoteRole(id, t.getAttribute("data-role") || ""); return; }
+    if (action === "roles-closed-toggle") { rolesClosedOpen[id] = !rolesClosedOpen[id]; render(); return; }
     if (action === "file-remove") { removeFile(t.getAttribute("data-fid")); return; }
     if (action === "crm-save") { saveToCrm(id); return; }
     if (action === "crm-remove") { removeFromCrm(id); return; }

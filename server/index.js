@@ -9,6 +9,7 @@ const { emailOf, isOwner, requireOwner, actorPool, testUser } = require("./actor
 const { listPlaybook, upsertPlaybookItem, deletePlaybookItem } = require("./playbook");
 const { listFiles, saveFile, getFile, deleteFile, MAX_FILE_BYTES } = require("./files");
 const { listJds, getJd, createJd, updateJd, deleteJd } = require("./jds");
+const { setRoleClosed, promoteRole } = require("./roles");
 const { renderJobDescriptionPdf } = require("./jdpdf");
 const backup = require("./backup");
 const ext = require("./ext");
@@ -361,6 +362,27 @@ app.post("/api/role-alerts/:id/seen", ensureAuthenticated, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to update the alert." });
+  }
+});
+
+// Mark a role closed (or open again). alertId "" is the role the company was saved with.
+app.post("/api/leads/:id/roles/closed", ensureAuthenticated, async (req, res) => {
+  try {
+    const b = req.body || {};
+    res.json(await setRoleClosed(actorPool(pool, emailOf(req)), req.params.id, String(b.alertId || ""), b.closed !== false));
+  } catch (err) {
+    if (!err.status) console.error(err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : "Failed to update the role." });
+  }
+});
+
+// Make a role found since the company's main role.
+app.post("/api/leads/:id/roles/promote", ensureAuthenticated, async (req, res) => {
+  try {
+    res.json(await promoteRole(actorPool(pool, emailOf(req)), req.params.id, String((req.body || {}).alertId || "")));
+  } catch (err) {
+    if (!err.status) console.error(err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : "Failed to change the main role." });
   }
 });
 

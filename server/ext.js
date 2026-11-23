@@ -121,7 +121,7 @@ async function loadContact(pool, id) {
     const [people, notes, alerts, jds] = await Promise.all([
       pool.query("select id, name, title, stage, linkedin, is_primary, next_follow_up from contacts where lead_id = $1 order by sort_order, id", [lead.id]),
       pool.query("select note_date, text, author from lead_notes where lead_id = $1 order by note_date desc nulls last, sort_order desc limit 6", [lead.id]),
-      pool.query("select job_title, job_url, date_posted, found_at, seen_at from role_alerts where lead_id = $1 order by found_at desc limit 6", [lead.id]),
+      pool.query("select job_title, job_url, date_posted, found_at, seen_at from role_alerts where lead_id = $1 and closed_at is null and promoted_at is null order by found_at desc limit 6", [lead.id]),
       pool.query("select id, content, status from job_descriptions where lead_id = $1 order by created_at desc", [lead.id]).catch(() => ({ rows: [] })),
     ]);
     out.card = leadCard(lead, people.rows, notes.rows, alerts.rows, jds.rows);
@@ -290,7 +290,7 @@ async function home(pool, opts = {}) {
     q(`select id, company, job_title, priority, date_added, in_crm from leads
         where date_added > current_date - 7 order by date_added desc, (priority = 'High') desc, company`),
     q(`select a.lead_id, l.company, a.job_title, a.job_url, a.found_at from role_alerts a join leads l on l.id = a.lead_id
-        where a.seen_at is null and ${OPEN} order by a.found_at desc`),
+        where a.seen_at is null and a.closed_at is null and a.promoted_at is null and ${OPEN} order by a.found_at desc`),
     q(`select case when activity_date > current_date - 7 then 'this' else 'last' end as wk,
               count(*) filter (where type = 'LinkedIn connection' and direction = 'Outbound') connections,
               count(*) filter (where type in ('LinkedIn message','Email','Call') and direction = 'Outbound') messages,
