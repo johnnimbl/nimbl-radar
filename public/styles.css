@@ -668,3 +668,7 @@ th.cl-col-last{white-space:nowrap;}
 /* A contact opened from a link (e.g. "Open in Radar" in the LinkedIn extension) */
 .contact-card.ct-flash{outline:3px solid var(--yellow);outline-offset:3px;transition:outline-color .6s;}
 @media (prefers-reduced-motion: reduce){.contact-card.ct-flash{transition:none;}}
+
+/* Someone else's relationship (e.g. Brian's client contact) */
+.owner-badge{font-size:.66rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);border:1px dashed var(--ink-soft);border-radius:999px;padding:2px 8px;white-space:nowrap;}
+.owner-note{font-size:.78rem;line-height:1.45;color:var(--ink-soft);padding:8px 10px;border:1px dashed var(--muted);border-radius:8px;background:var(--paper);}

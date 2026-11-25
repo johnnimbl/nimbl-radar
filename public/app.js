@@ -284,7 +284,7 @@
     state.leads.forEach(function (l) {
       if (DEAD_STATUSES.indexOf(l.status) !== -1) return;
       (l.contacts || []).forEach(function (c) {
-        if (!isIsoDate(c.nextFollowUp) || c.stage === "Not interested") return;
+        if (c.owner || !isIsoDate(c.nextFollowUp) || c.stage === "Not interested") return;
         out.push({ lead: l, contact: c, days: diffDays(c.nextFollowUp, today) });
       });
     });
@@ -303,7 +303,7 @@
     var today = todayStr();
     if (DEAD_STATUSES.indexOf(l.status) !== -1) return 0;
     return (l.contacts || []).filter(function (c) {
-      return isIsoDate(c.nextFollowUp) && c.stage !== "Not interested" && diffDays(c.nextFollowUp, today) <= 0;
+      return !c.owner && isIsoDate(c.nextFollowUp) && c.stage !== "Not interested" && diffDays(c.nextFollowUp, today) <= 0;
     }).length;
   }
 
@@ -519,6 +519,8 @@
     state.leads.forEach(function (l) {
       if (DEAD_STATUSES.indexOf(l.status) !== -1) return;
       var contacts = l.contacts || [];
+      // A company where a colleague looks after the relationship: don't go around them.
+      if (contacts.some(function (c) { return c.owner; })) return;
       var started = contacts.filter(function (c) { return (c.stage || "Not contacted") !== "Not contacted"; });
       if (!started.length) return;
       var engaged = started.some(function (c) { return c.stage === "Replied" || c.stage === "Meeting booked"; });
@@ -700,7 +702,7 @@
   }
 
   function dueBadgeFor(c) {
-    if (!isIsoDate(c.nextFollowUp) || c.stage === "Not interested") return "";
+    if (c.owner || !isIsoDate(c.nextFollowUp) || c.stage === "Not interested") return "";
     var days = diffDays(c.nextFollowUp, todayStr());
     if (days > FOLLOWUP_WINDOW_DAYS) return "";
     return '<span class="due-badge ' + dueClass(days) + '">' + dueLabel(days) + '</span>';
@@ -786,6 +788,7 @@
           '<div class="avatar">' + escapeHtml(initialsOf(c.name)) + '</div>' +
           '<div class="ct-name-wrap"><input class="ct-name-input" type="text" value="' + escapeHtml(c.name) + '" placeholder="Contact name" data-action="edit-contact" data-field="name" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
           firstBadge +
+          (c.owner ? '<span class="owner-badge" title="' + escapeHtml(c.owner) + ' looks after this relationship">' + escapeHtml(c.owner) + '\'s contact</span>' : '') +
           '<select class="mini ct-stage" data-action="set-contact-stage" data-id="' + l.id + '" data-cid="' + c.id + '" aria-label="Outreach stage"' + d + '>' +
             CONTACT_STAGES.map(function (s) { return '<option value="' + s + '"' + (stage === s ? " selected" : "") + '>' + s + '</option>'; }).join("") +
           '</select>' +
@@ -794,7 +797,8 @@
         renderAgentFoundNote(l, c) +
         renderEmailFinder(l, c) +
         '<div class="ct-crm">' +
-          renderSequenceBlock(l, c) +
+          (c.owner ? '<div class="owner-note">' + escapeHtml(c.owner) + ' looks after ' + escapeHtml((c.name || "this person").split(" ")[0]) +
+            ', so Radar doesn\'t suggest messages or follow-ups for them. Check with ' + escapeHtml(c.owner) + ' before reaching out.</div>' : renderSequenceBlock(l, c)) +
           '<div class="ct-meta">' +
             '<span>Last contacted: <strong>' + (c.lastContacted ? fmtDate(c.lastContacted) : "never") + '</strong></span>' +
             (whoName(c.addedBy) ? '<span>Added by ' + escapeHtml(whoName(c.addedBy)) + '</span>' : '') +
@@ -817,6 +821,10 @@
           '<div><label>Email</label><input type="email" value="' + escapeHtml(c.email) + '" data-action="edit-contact" data-field="email" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
           '<div><label>LinkedIn</label><input type="text" value="' + escapeHtml(c.linkedin) + '" data-action="edit-contact" data-field="linkedin" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
         '</div>' +
+        '<div class="field-row">' +
+          '<div><label>Location</label><input type="text" value="' + escapeHtml(c.location || "") + '" placeholder="e.g. Atlanta, GA" data-action="edit-contact" data-field="location" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
+          '<div><label>Whose contact</label><input type="text" value="' + escapeHtml(c.owner || "") + '" placeholder="Leave empty if it\'s yours, or e.g. Brian" data-action="edit-contact" data-field="owner" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
+        '</div>' +
         '<div class="role-pills">' + rolesPills + '</div>'
         ) : "") +
       '</div>';
@@ -826,6 +834,7 @@
   function renderContactSummary(l, c, open) {
     var bits = [];
     if (c.title) bits.push(escapeHtml(c.title));
+    if (c.location) bits.push(escapeHtml(c.location));
     if (c.email) bits.push('<a href="mailto:' + escapeHtml(c.email) + '">' + escapeHtml(c.email) + '</a>');
     if (c.phone) bits.push(escapeHtml(c.phone));
     return '<div class="ct-summary"><span>' + (bits.length ? bits.join(' · ') : 'No title or contact details yet') + '</span>' +
@@ -1702,6 +1711,7 @@
 
     items.forEach(function (i) {
       var l = i.lead, c = i.contact, stage = i.stage;
+      if (c.owner) return; // someone else's relationship: no follow-ups suggested
       var who = c.name || "(unnamed contact)";
       var nt = nextTouch(c);
       // 1. A reply waiting for an answer
@@ -1740,6 +1750,15 @@
       var target = firstContact(l);
       var touched = (l.contacts || []).filter(function (c) { return (c.stage || "Not contacted") !== "Not contacted" && c.stage !== "Not interested"; });
       if (touched.length) target = touched.sort(function (x, y) { return (y.lastContacted || "").localeCompare(x.lastContacted || ""); })[0];
+      // When the person to tell is someone else's contact, the move is to pass the roles on to them.
+      if (target && target.owner) {
+        var ftitles = fresh.map(function (a) { return a.jobTitle || a.roleType || "new"; });
+        moves.push({ key: "alerts-" + l.id, kind: "alert", lead: l, contact: null, owner: "you", score: 70 + prioBoost(l), alert: fresh[0], draft: null,
+          action: "Let " + target.owner + " know about " + (fresh.length === 1 ? "the new " + ftitles[0] + " role" : fresh.length + " new roles") + " at " + l.company,
+          why: (target.name || "Your contact") + " is " + target.owner + "'s contact, so " + target.owner + " is best placed to raise " + (fresh.length === 1 ? "it" : "them") + ".",
+          badge: '<span class="due-badge due-overdue">' + (fresh.length === 1 ? 'New role' : fresh.length + ' new roles') + '</span>', logLabel: "Log" });
+        return;
+      }
       var ids = fresh.map(function (a) { return a.id; });
       var covers = function (d) {
         var m = d.meta || {};
@@ -1775,6 +1794,7 @@
     // 5. Companies not approached yet (one first contact each, paced)
     var room = Math.max(0, DAILY_NEW_OUTREACH - newOutreachToday());
     var starts = items.filter(function (i) {
+      if (i.contact.owner) return false;
       if (i.stage !== "Not contacted" || isIsoDate(i.contact.nextFollowUp)) return false;
       var started = (i.lead.contacts || []).some(function (c) { return (c.stage || "Not contacted") !== "Not contacted"; });
       if (started) return false;
@@ -2039,7 +2059,7 @@
   function renderCrm() {
     var items = crmContacts();
     var today = todayStr();
-    var scheduled = items.filter(function (i) { return isIsoDate(i.contact.nextFollowUp) && i.stage !== "Not interested"; }).map(function (i) {
+    var scheduled = items.filter(function (i) { return !i.contact.owner && isIsoDate(i.contact.nextFollowUp) && i.stage !== "Not interested"; }).map(function (i) {
       return { lead: i.lead, contact: i.contact, days: diffDays(i.contact.nextFollowUp, today) };
     }).sort(function (a, b) { return a.days - b.days || a.lead.company.localeCompare(b.lead.company); });
     var overdue = scheduled.filter(function (x) { return x.days < 0; });
@@ -2290,7 +2310,7 @@
   function leadNextStep(l) {
     var today = todayStr(), best = null;
     (l.contacts || []).forEach(function (c) {
-      if (!isIsoDate(c.nextFollowUp) || c.stage === "Not interested") return;
+      if (c.owner || !isIsoDate(c.nextFollowUp) || c.stage === "Not interested") return;
       var days = diffDays(c.nextFollowUp, today);
       if (!best || days < best.days) best = { contact: c, days: days };
     });
@@ -3621,8 +3641,15 @@
     }
     if (action === "quick-add") { quickAdd(); return; }
     if (action === "open-add") {
+      // The form lives on the Leads tab: go there first from any other tab.
+      if (!document.getElementById("add-panel")) { setView("leads"); render(); }
       var p = document.getElementById("add-panel");
-      if (p) { p.hidden = false; if (typeof p.scrollIntoView === "function") p.scrollIntoView({ behavior: "smooth", block: "center" }); }
+      if (p) {
+        p.hidden = false;
+        if (typeof p.scrollIntoView === "function") p.scrollIntoView({ behavior: "smooth", block: "center" });
+        var first = document.getElementById("af-company");
+        if (first) first.focus({ preventScroll: true });
+      }
       return;
     }
     if (action === "cancel-add") {
@@ -3683,7 +3710,9 @@
       if (c) {
         var ef = t.getAttribute("data-field");
         c[ef] = t.value.trim();
-        if (c.agentFound && (ef === "name" || ef === "title")) { c.agentFound = false; persist(); } else { persist({ noRender: true }); }
+        if (c.agentFound && (ef === "name" || ef === "title")) { c.agentFound = false; persist(); }
+        else if (ef === "owner") { persist(); }
+        else { persist({ noRender: true }); }
       }
       return;
     }

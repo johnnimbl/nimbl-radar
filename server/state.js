@@ -116,6 +116,7 @@ async function getState(pool) {
     contacts: (contactsByLead[l.id] || []).map((c) => ({
       id: c.id, name: c.name || "", title: c.title || "", email: c.email || "",
       phone: c.phone || "", linkedin: c.linkedin || "", roles: c.roles || [],
+      location: c.location || "", owner: c.owner || "",
       stage: c.stage || "Not contacted",
       nextFollowUp: dateOrEmpty(c.next_follow_up),
       lastContacted: dateOrEmpty(c.last_contacted),
@@ -186,6 +187,7 @@ function leadFingerprint(l, current) {
     notes: arr(l.notes).map((n) => [d10(n.date), n.text || ""]),
     contacts: arr(l.contacts).map((c) => [
       c.id, c.name || "", c.title || "", c.email || "", c.phone || "", c.linkedin || "", c.roles || [],
+      c.location || "", c.owner || "",
       CONTACT_STAGES.includes(c.stage) ? c.stage : "Not contacted", d10(c.nextFollowUp), d10(c.lastContacted),
       Math.min(5, Math.max(0, parseInt(c.sequenceStep, 10) || 0)), c.isPrimary === true,
       c.agentFound === true, String(c.sourceUrl || "").slice(0, 1000),
@@ -230,9 +232,10 @@ function describeChanges(cur, l) {
     else {
       const stage = CONTACT_STAGES.includes(c.stage) ? c.stage : "Not contacted";
       if (stage !== o.stage) add("stage", (c.name || o.name) + ": " + o.stage + " → " + stage);
-      if ((c.name || "") !== o.name || (c.title || "") !== o.title || (c.email || "") !== o.email || (c.phone || "") !== o.phone || (c.linkedin || "") !== o.linkedin)
+      if ((c.name || "") !== o.name || (c.title || "") !== o.title || (c.email || "") !== o.email || (c.phone || "") !== o.phone || (c.linkedin || "") !== o.linkedin || (c.location || "") !== (o.location || ""))
         add("contact", "Edited contact " + (c.name || o.name));
       if (c.isPrimary === true && !o.isPrimary) add("contact", (c.name || o.name) + " is now the first person to contact");
+      if ((c.owner || "") !== (o.owner || "")) add("contact", (c.name || o.name) + (c.owner ? " is " + c.owner + "'s contact" : " is no longer marked as someone else's contact"));
     }
     const had = new Set(arr(o && o.activities).map((a) => a.id));
     for (const a of arr(c.activities)) {
@@ -298,6 +301,15 @@ async function putState(pool, state, opts = {}) {
     const conflicts = [];
     for (const l of leads) {
       const current = storedById[l.id];
+      // A tab still running an older version of the app doesn't send newer contact fields: keep what's stored.
+      if (current && Array.isArray(l.contacts)) {
+        const was = {};
+        for (const c of current.contacts) was[c.id] = c;
+        for (const c of l.contacts) {
+          if (!c || !was[c.id]) continue;
+          for (const k of ["location", "owner"]) if (c[k] === undefined) c[k] = was[c.id][k];
+        }
+      }
       if (current && leadFingerprint(l, current) === leadFingerprint(current, current)) continue;
       if (current && l.rev && current.rev && l.rev !== current.rev) { conflicts.push(l.id); continue; }
       written++;
@@ -355,8 +367,8 @@ async function putState(pool, state, opts = {}) {
       for (let i = 0; i < contacts.length; i++) {
         const c = contacts[i];
         await client.query(
-          `insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order, stage, next_follow_up, last_contacted, sequence_step, is_primary, agent_found, source_url, added_by, email_info)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+          `insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order, stage, next_follow_up, last_contacted, sequence_step, is_primary, agent_found, source_url, added_by, email_info, location, owner)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
           [
             c.id, l.id, c.name || "", c.title || "", c.email || "", c.phone || "", c.linkedin || "", c.roles || [], i,
             CONTACT_STAGES.includes(c.stage) ? c.stage : "Not contacted",
@@ -366,6 +378,7 @@ async function putState(pool, state, opts = {}) {
             c.id in prevAdded ? prevAdded[c.id] : actor,
             // "Find email" results are written by the server only; the browser's copy never changes them.
             prevEmailInfo[c.id] ? JSON.stringify(prevEmailInfo[c.id]) : null,
+            String(c.location || "").trim().slice(0, 120), String(c.owner || "").trim().slice(0, 60),
           ]
         );
         const acts = Array.isArray(c.activities) ? c.activities : [];

@@ -204,7 +204,7 @@
     }
     S.person = person;
     if (!person) { S.loading = false; render(); return; }
-    const q = new URLSearchParams({ linkedin: person.linkedin || "", name: person.name || "", company: person.company || "" });
+    const q = new URLSearchParams({ linkedin: person.linkedin || "", name: person.name || "", company: person.company || "", location: person.location || "" });
     const r = await api("GET", "/lookup?" + q.toString());
     if (seq !== loadSeq) return;
     S.loading = false;
@@ -331,15 +331,19 @@
     const radarLink = S.radarUrl ? S.radarUrl + "/#lead/" + encodeURIComponent(lead.id) + (c.id ? "/" + encodeURIComponent(c.id) : "") : "";
     const stageCls = c.stage === "Replied" || c.stage === "Meeting booked" ? "good" : c.stage === "Not contacted" ? "warn" : "teal";
     let h = '<div class="sec"><div class="row"><span class="name">' + esc(c.name) + '</span><span class="chip ' + stageCls + '">' + esc(c.stage) + "</span></div>" +
-      (c.title ? '<div class="sub">' + esc(c.title) + "</div>" : "") +
+      (c.title || c.location ? '<div class="sub">' + esc([c.title, c.location].filter(Boolean).join(" · ")) + "</div>" : "") +
       '<div class="row sub">' + esc(lead.company || "") + (radarLink ? ' · <a href="' + esc(radarLink) + '" target="_blank" rel="noopener">Open in Radar ↗</a>' : "") + "</div>" +
       '<div class="sub">Touch ' + (c.step || 0) + " of 5" + (c.nextFollowUp ? " · " + esc(followLabel(c.nextFollowUp)) : "") + "</div></div>";
     if (c.agentFound) {
       h += '<div class="warnbox"><strong>Found by the agent.</strong><span>Check that the title on this profile still matches before you reach out.</span>' +
         '<div class="row"><button type="button" class="btn" data-act="checked">Title looks right</button></div></div>';
     }
-    const drafts = c.drafts || [];
-    h += '<div class="sec"><h3>Drafts</h3>';
+    if (c.owner) {
+      h += '<div class="warnbox"><strong>' + esc(c.owner) + "'s contact.</strong><span>" + esc(c.owner) + " looks after " + esc(c.name.split(" ")[0]) +
+        ", so Radar doesn't draft messages for them. Check with " + esc(c.owner) + " before reaching out.</span></div>";
+    }
+    const drafts = c.owner ? [] : c.drafts || [];
+    h += c.owner ? '<div class="sec" hidden>' : '<div class="sec"><h3>Drafts</h3>';
     if (!drafts.length) h += '<p class="note">No draft waiting. Ask Claude in chat to draft touch ' + nextTouch(c) + " for " + esc(c.name.split(" ")[0]) + ".</p>";
     drafts.forEach((d) => {
       const t = draftText(d);

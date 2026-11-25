@@ -100,6 +100,7 @@ function leadCard(lead, people, notes, alerts, jds) {
 function contactJson(c, lead, drafts, acts) {
   return {
     id: c.id, name: c.name, title: c.title, linkedin: c.linkedin, stage: c.stage, step: c.sequence_step || 0,
+    location: c.location || "", owner: c.owner || "",
     nextFollowUp: dstr(c.next_follow_up), lastContacted: dstr(c.last_contacted), isPrimary: c.is_primary,
     agentFound: c.agent_found, sourceUrl: c.source_url || "",
     lead: lead ? { id: lead.id, company: lead.company, status: lead.status, priority: lead.priority, inCrm: lead.in_crm, jobTitle: lead.job_title } : null,
@@ -155,6 +156,12 @@ async function lookup(pool, q) {
       contact = await loadContact(pool, hit.id);
     }
   }
+  // Fill in where the person is based from their profile, when Radar doesn't have it yet.
+  const loc = String(q.location || "").trim();
+  if (contact && !contact.location && loc && loc.length <= 80) {
+    await pool.query("update contacts set location = $2 where id = $1 and location = ''", [contact.id, loc]);
+    contact.location = loc;
+  }
   const companies = q.company ? await matchLeads(pool, q.company) : [];
   return { contact, companies };
 }
@@ -194,11 +201,12 @@ async function addContact(pool, b) {
     if (dup.rows.length) return loadContact(pool, dup.rows[0].id);
   }
   const id = "cx" + crypto.randomBytes(5).toString("hex");
-  const title = [String(b.title || "").trim(), b.location ? "(" + String(b.location).trim() + ")" : ""].filter(Boolean).join(" ").slice(0, 300);
+  const title = String(b.title || "").trim().slice(0, 300);
+  const location = String(b.location || "").trim().slice(0, 120);
   await pool.query(
-    `insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order, stage, sequence_step, is_primary, agent_found, source_url)
-     values ($1,$2,$3,$4,'','',$5,'{}',(select coalesce(max(sort_order)+1,0) from contacts where lead_id=$2),'Not contacted',0,false,false,$5)`,
-    [id, lead.id, name, title, linkedin]
+    `insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order, stage, sequence_step, is_primary, agent_found, source_url, location)
+     values ($1,$2,$3,$4,'','',$5,'{}',(select coalesce(max(sort_order)+1,0) from contacts where lead_id=$2),'Not contacted',0,false,false,$5,$6)`,
+    [id, lead.id, name, title, linkedin, location]
   );
   return loadContact(pool, id);
 }
@@ -275,14 +283,14 @@ async function home(pool, opts = {}) {
     q(`select c.id, c.name, c.title, c.linkedin, c.stage, c.next_follow_up, c.sequence_step, l.id lead_id, l.company, l.in_crm,
               (current_date - c.next_follow_up) as days_over
          from contacts c join leads l on l.id = c.lead_id
-        where ${OPEN} and c.next_follow_up is not null and c.next_follow_up <= current_date and c.stage <> 'Not interested'
+        where ${OPEN} and c.next_follow_up is not null and c.next_follow_up <= current_date and c.stage <> 'Not interested' and c.owner = ''
           and ($1 = '' or lower(coalesce(nullif((select a.author from activities a where a.contact_id = c.id and a.type <> 'Note'
                 order by a.activity_date desc, a.sort_order desc limit 1), ''), c.added_by)) = $1)
         order by c.next_follow_up, l.in_crm desc, c.name`, [me]),
     q(`select d.contact_id, d.touch, d.kind, c.name, c.linkedin, l.id lead_id, l.company, l.in_crm
          from agent_drafts d join leads l on l.id = d.lead_id left join contacts c on c.id = d.contact_id
         where d.used_at is null and d.dismissed_at is null and d.kind <> 'contact' and d.created_at > now() - interval '21 days'
-          and ${OPEN} and (coalesce(d.contact_id, '') = '' or (c.id is not null and c.stage not in ('Not interested','No response')))
+          and ${OPEN} and (coalesce(d.contact_id, '') = '' or (c.id is not null and c.owner = '' and c.stage not in ('Not interested','No response')))
         order by l.in_crm desc, d.created_at desc`),
     q(`select c.id, c.name, c.title, c.linkedin, l.id lead_id, l.company, l.in_crm
          from contacts c join leads l on l.id = c.lead_id
