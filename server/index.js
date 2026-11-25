@@ -11,6 +11,7 @@ const { listFiles, saveFile, getFile, deleteFile, MAX_FILE_BYTES } = require("./
 const { listJds, getJd, createJd, updateJd, deleteJd } = require("./jds");
 const { setRoleClosed, promoteRole } = require("./roles");
 const { findEmail } = require("./emailfinder");
+const companyli = require("./companyli");
 const { renderJobDescriptionPdf } = require("./jdpdf");
 const backup = require("./backup");
 const ext = require("./ext");
@@ -480,4 +481,12 @@ app.listen(port, () => {
   ext.ensureSchema(pool).catch((err) => console.error("extension schema:", err.message));
   // While the server is awake, look for a due weekly backup every 3 hours.
   setInterval(() => backup.backupIfDue(pool).catch((err) => console.error("Weekly backup failed:", err.message)), 3 * 3600 * 1000);
+  // Fill in companies' LinkedIn pages from the links on their own websites.
+  const fillLinkedins = (limit) => companyli.fillCompanyLinkedins(pool, { limit })
+    .then((r) => { if (r.checked) console.log(`Company LinkedIn: checked ${r.checked} websites, found ${r.found}.`); })
+    .catch((err) => console.error("Company LinkedIn:", err.message));
+  if (!process.env.RADAR_NO_BACKGROUND) {
+    setTimeout(() => fillLinkedins(120), 20 * 1000);
+    setInterval(() => fillLinkedins(25), 6 * 3600 * 1000);
+  }
 });

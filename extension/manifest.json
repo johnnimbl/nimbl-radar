@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Nimbl Radar",
   "short_name": "Radar",
-  "version": "1.3.8",
+  "version": "1.3.9",
   "description": "Use Nimbl Radar on LinkedIn: see who is already in Radar, save people, insert drafts and log touches. You always press Send yourself.",
   "icons": {
     "16": "icons/icon16.png",

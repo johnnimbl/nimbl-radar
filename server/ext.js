@@ -157,6 +157,16 @@ async function lookup(pool, q) {
       contact = await loadContact(pool, hit.id);
     }
   }
+  // The company's LinkedIn page, from the "current company" link on the profile, when Radar has none
+  // and the profile's company is the same one.
+  const coUrl = String(q.companyUrl || "");
+  if (contact && contact.lead && /linkedin\.com\/company\/[^/?#]+/i.test(coUrl) && q.company) {
+    const co = norm(q.company), lc = norm(contact.lead.company);
+    if (co && lc && (co === lc || co.startsWith(lc) || lc.startsWith(co))) {
+      const slug = require("./companyli").companySlug(coUrl);
+      if (slug && !/^\d+$/.test(slug)) await require("./companyli").saveIfMissing(pool, contact.lead.id, "https://www.linkedin.com/company/" + slug + "/", "LinkedIn profile").catch(() => {});
+    }
+  }
   // Fill in where the person is based from their profile, when Radar doesn't have it yet.
   const loc = String(q.location || "").trim();
   if (contact && !contact.location && loc && loc.length <= 80) {

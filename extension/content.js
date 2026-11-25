@@ -98,7 +98,11 @@
       if (coEl) company = (coEl.getAttribute("aria-label") || "").replace(/^(Current company|View company):?\s*/i, "").replace(/\.\s*Click.*$/i, "").trim();
     }
     if (!company) { const m = /(?:\bat\b|@)\s+([^|,·•]+)/i.exec(title); if (m) company = m[1].trim(); }
-    return { slug, linkedin: "https://www.linkedin.com/in/" + slug + "/", name, title, location, company };
+    // The current company's LinkedIn page (Radar saves it on the company when it has none).
+    const coLink = card.querySelector('a[aria-label^="Current company"][href*="/company/"], a[aria-label^="View company:"][href*="/company/"]') ||
+      (card.querySelector('[aria-label^="Current company"], [aria-label^="View company:"]') || { closest: () => null }).closest('a[href*="/company/"]');
+    const companyUrl = coLink ? coLink.href.split("?")[0] : "";
+    return { slug, linkedin: "https://www.linkedin.com/in/" + slug + "/", name, title, location, company, companyUrl };
   }
 
   function ownSlug() {
@@ -209,7 +213,7 @@
     }
     S.person = person;
     if (!person) { S.loading = false; render(); return; }
-    const q = new URLSearchParams({ linkedin: person.linkedin || "", name: person.name || "", company: person.company || "", location: person.location || "" });
+    const q = new URLSearchParams({ linkedin: person.linkedin || "", name: person.name || "", company: person.company || "", location: person.location || "", companyUrl: person.companyUrl || "" });
     const r = await api("GET", "/lookup?" + q.toString());
     if (seq !== loadSeq) return;
     S.loading = false;
