@@ -14,15 +14,31 @@ async function fetchHtml(url, ms) {
   } catch (e) { return ""; } finally { clearTimeout(t); }
 }
 
+// Website builders, job boards and HR tools whose own LinkedIn link sits in many sites' footers.
+const NOT_THE_COMPANY = /^(wix-com|wix|squarespace|wordpress|webflow|godaddy|hubspot|built-in|builtin|rippling|greenhouse|lever|workable|breezy-hr|breezyhr|bamboohr|indeed|glassdoor|ziprecruiter|teamtailor|recruitee|jobvite|smartrecruiters|workday|gusto|paylocity|adp|linkedin)$/;
+
+// Does the slug look like it belongs to this company? Numeric ids can't be checked, so they pass.
+function slugFits(slug, company, website) {
+  if (/^\d+$/.test(slug)) return true;
+  const flat = slug.replace(/[^a-z0-9]/g, "");
+  const host = (originOf(website).replace(/^https?:\/\/(www\.)?/, "").split(".")[0] || "").toLowerCase();
+  const words = String(company || "").toLowerCase().replace(/\([^)]*\)/g, " ").split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 3 && !/^(inc|llc|ltd|the|and|group|consulting|solutions|technology|technologies)$/.test(w));
+  if (host && host.length >= 3 && (flat.includes(host.replace(/[^a-z0-9]/g, "")) || host.replace(/[^a-z0-9]/g, "").includes(flat))) return true;
+  return words.some((w) => flat.includes(w));
+}
+
 // "https://www.linkedin.com/company/cabin-consulting/" from any linkedin.com/company/<slug> links on
 // the page; the slug linked most often wins (a footer link usually appears more than once).
-function companyLinkFrom(html) {
+// Links to website builders or job boards, or that don't look like this company, are skipped.
+function companyLinkFrom(html, company, website) {
   const counts = {};
   const re = /https?:\/\/(?:[a-z]{2,3}\.)?linkedin\.com\/company\/([A-Za-z0-9%_.-]+)/gi;
   let m;
   while ((m = re.exec(html))) {
     const slug = decodeURIComponent(m[1]).replace(/\.+$/, "").toLowerCase();
-    if (!slug || /^(linkedin|login|signup|jobs)$/.test(slug)) continue;
+    if (!slug || /^(login|signup|jobs)$/.test(slug) || NOT_THE_COMPANY.test(slug)) continue;
+    if (company !== undefined && !slugFits(slug, company, website)) continue;
     counts[slug] = (counts[slug] || 0) + 1;
   }
   const best = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
@@ -35,11 +51,11 @@ function originOf(website) {
   try { return new URL(/^https?:\/\//i.test(s) ? s : "https://" + s).origin; } catch (e) { return ""; }
 }
 
-async function findForWebsite(website) {
+async function findForWebsite(website, company) {
   const origin = originOf(website);
   if (!origin) return "";
   for (const p of ["", "/about", "/about-us", "/contact", "/contact-us"]) {
-    const link = companyLinkFrom(await fetchHtml(origin + p));
+    const link = companyLinkFrom(await fetchHtml(origin + p), company || "", website);
     if (link) return link;
   }
   return "";
@@ -57,13 +73,13 @@ async function saveIfMissing(pool, leadId, url, source) {
 async function fillCompanyLinkedins(pool, opts) {
   const limit = (opts && opts.limit) || 25;
   const rows = (await pool.query(
-    `select id, website from leads
+    `select id, company, website from leads
       where status not in ('Lost','Not a Fit') and coalesce(website, '') <> '' and coalesce(client_info->>'linkedin', '') = ''
         and (client_info->>'linkedinLookedAt' is null or (client_info->>'linkedinLookedAt')::date < current_date - ${RECHECK_DAYS})
       order by in_crm desc, date_added desc limit $1`, [limit])).rows;
   let found = 0;
   for (const l of rows) {
-    const url = await findForWebsite(l.website);
+    const url = await findForWebsite(l.website, l.company);
     if (url && await saveIfMissing(pool, l.id, url, "company website")) found++;
     else {
       // Remember the look so the same sites aren't fetched every few hours. (No updated_at bump:
