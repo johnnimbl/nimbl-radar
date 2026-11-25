@@ -6,7 +6,7 @@
 const crypto = require("crypto");
 
 const CADENCE_DAYS = { "Connection sent": 4, "Connected": 2, "Message sent": 5, "Replied": 2 };
-const STAGE_RANK = { "Not contacted": 0, "No response": 0, "Connection sent": 1, "Connected": 2, "Message sent": 3, "Replied": 4, "Meeting booked": 5, "Not interested": 99 };
+const STAGE_RANK = { "Not contacted": 0, "No response": 0, "Connection sent": 1, "Request pending": 1.5, "Connected": 2, "Message sent": 3, "Replied": 4, "Meeting booked": 5, "Not interested": 99 };
 const STATUS_ORDER = ["Not Started", "Researching", "Contacted", "Replied", "Meeting Booked", "Proposal Sent", "Won"];
 const STAGE_TO_STATUS = { "Connection sent": "Contacted", "Connected": "Contacted", "Message sent": "Contacted", "Replied": "Replied", "Meeting booked": "Meeting Booked" };
 
@@ -104,7 +104,8 @@ function contactJson(c, lead, drafts, acts) {
     nextFollowUp: dstr(c.next_follow_up), lastContacted: dstr(c.last_contacted), isPrimary: c.is_primary,
     agentFound: c.agent_found, sourceUrl: c.source_url || "",
     lead: lead ? { id: lead.id, company: lead.company, status: lead.status, priority: lead.priority, inCrm: lead.in_crm, jobTitle: lead.job_title } : null,
-    drafts: (drafts || []).map((d) => ({ id: d.id, kind: d.kind, touch: d.touch, body: d.body, why: (d.meta && d.meta.why) || "" })),
+    // Someone who never accepted the request gets the InMail/email drafts, not "thanks for connecting".
+    drafts: (drafts || []).filter((d) => c.stage !== "Request pending" || !/^\s*(thanks|thank you)( so much)? for connecting/i.test(d.body || "")).map((d) => ({ id: d.id, kind: d.kind, touch: d.touch, body: d.body, why: (d.meta && d.meta.why) || "" })),
     activities: (acts || []).map((a) => ({ type: a.type, direction: a.direction, date: dstr(a.activity_date), summary: a.summary, author: a.author || "" })),
   };
 }
@@ -223,7 +224,8 @@ async function logActivity(pool, b) {
   else if (what === "message") {
     const touch = Math.min(5, Math.max(2, parseInt(b.touch, 10) || step + 1));
     step = Math.max(step, touch);
-    if ((STAGE_RANK[stage] || 0) < 3) stage = "Message sent";
+    // An InMail to someone who never accepted the request keeps them in "Request pending".
+    if ((STAGE_RANK[stage] || 0) < 3 && stage !== "Request pending") stage = "Message sent";
   } else if (what === "reply") { direction = "Inbound"; if ((STAGE_RANK[stage] || 0) < 4 || stage === "Not interested") stage = "Replied"; }
   else if (what === "note") { type = "Note"; }
   else throw Object.assign(new Error("Unknown activity."), { status: 400 });

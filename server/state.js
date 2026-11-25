@@ -7,7 +7,7 @@
 // leads whose content actually changed: the browser always sends every lead, and
 // rewriting all of them took hundreds of database round trips per save.
 
-const CONTACT_STAGES = ["Not contacted", "Connection sent", "Connected", "Message sent", "Replied", "Meeting booked", "Not interested", "No response"];
+const CONTACT_STAGES = ["Not contacted", "Connection sent", "Request pending", "Connected", "Message sent", "Replied", "Meeting booked", "Not interested", "No response"];
 const ACTIVITY_TYPES = ["LinkedIn connection", "LinkedIn message", "Email", "Call", "Meeting", "Note"];
 const ACTIVITY_DIRECTIONS = ["Outbound", "Inbound"];
 

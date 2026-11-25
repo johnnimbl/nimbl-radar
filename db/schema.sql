@@ -67,7 +67,7 @@ create index if not exists contacts_lead_id_idx on contacts(lead_id);
 -- stage: where this person is in your outreach; next_follow_up drives the
 -- dashboard's "Follow-ups due" list; last_contacted is stamped when you log an activity.
 alter table contacts add column if not exists stage text not null default 'Not contacted'
-  check (stage in ('Not contacted','Connection sent','Connected','Message sent','Replied','Meeting booked','Not interested','No response'));
+  check (stage in ('Not contacted','Connection sent','Request pending','Connected','Message sent','Replied','Meeting booked','Not interested','No response'));
 alter table contacts add column if not exists next_follow_up date;
 alter table contacts add column if not exists last_contacted date;
 

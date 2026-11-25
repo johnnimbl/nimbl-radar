@@ -112,3 +112,12 @@ alter table contacts add column if not exists email_info jsonb;
 -- (e.g. "Brian" for a client contact Brian looks after): no outreach is suggested for them.
 alter table contacts add column if not exists location text not null default '';
 alter table contacts add column if not exists owner text not null default '';
+
+-- "Request pending": the connection request wasn't accepted within a week, so touch 2 is an InMail or email.
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'contacts_stage_check' and pg_get_constraintdef(oid) like '%Request pending%') then
+    alter table contacts drop constraint if exists contacts_stage_check;
+    alter table contacts add constraint contacts_stage_check check (stage in
+      ('Not contacted','Connection sent','Request pending','Connected','Message sent','Replied','Meeting booked','Not interested','No response'));
+  end if;
+end $$;

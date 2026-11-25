@@ -8,31 +8,35 @@
   var ACTIVE_STATUSES = ["Contacted", "Replied", "Meeting Booked", "Proposal Sent"];
   var DEAD_STATUSES = ["Lost", "Not a Fit"];
   var CONTACT_ROLES = ["Admin", "Accounting", "HR", "Signatory", "Technical", "Billing"];
-  var CONTACT_STAGES = ["Not contacted", "Connection sent", "Connected", "Message sent", "Replied", "Meeting booked", "Not interested", "No response"];
+  var CONTACT_STAGES = ["Not contacted", "Connection sent", "Request pending", "Connected", "Message sent", "Replied", "Meeting booked", "Not interested", "No response"];
   var ACTIVITY_TYPES = ["LinkedIn connection", "LinkedIn message", "Email", "Call", "Meeting", "Note"];
   // How far along a contact is. "Not interested" outranks everything so it is never auto-suggested away.
-  var STAGE_RANK = { "Not contacted": 0, "No response": 0, "Connection sent": 1, "Connected": 2, "Message sent": 3, "Replied": 4, "Meeting booked": 5, "Not interested": 99 };
+  var STAGE_RANK = { "Not contacted": 0, "No response": 0, "Connection sent": 1, "Request pending": 1.5, "Connected": 2, "Message sent": 3, "Replied": 4, "Meeting booked": 5, "Not interested": 99 };
   // Company status a contact's stage pulls the lead up to (forward only).
-  var STAGE_TO_STATUS = { "Connection sent": "Contacted", "Connected": "Contacted", "Message sent": "Contacted", "Replied": "Replied", "Meeting booked": "Meeting Booked" };
+  var STAGE_TO_STATUS = { "Connection sent": "Contacted", "Request pending": "Contacted", "Connected": "Contacted", "Message sent": "Contacted", "Replied": "Replied", "Meeting booked": "Meeting Booked" };
   var AUTO_ADVANCE_FROM = ["Not Started", "Researching", "Contacted", "Replied", "Meeting Booked"];
   var FOLLOWUP_WINDOW_DAYS = 7;
   // Days until the next nudge once a contact reaches this stage. Edit these to change your rhythm.
-  var CADENCE_DAYS = { "Connection sent": 4, "Connected": 2, "Message sent": 5, "Replied": 2, "No response": 14 };
+  var CADENCE_DAYS = { "Connection sent": 7, "Request pending": 5, "Connected": 2, "Message sent": 5, "Replied": 2, "No response": 14 };
   // The outreach plan every contact follows. "wait" = days after the previous touch (touch 2 counts from
   // the day they accept your connection request). Edit the text or timing here to change the plan.
   var SEQUENCE = [
     { n: 1, name: "Connection request", type: "LinkedIn connection", wait: 0, tip: "Send a LinkedIn connection request with a short note that mentions the role they are hiring for." },
-    { n: 2, name: "First message", type: "LinkedIn message", wait: 2, tip: "Once they accept, name the open role you saw and offer 2–3 anonymized LATAM profiles." },
+    { n: 2, name: "First message", type: "LinkedIn message", wait: 0, tip: "They accepted: name the open role you saw and offer 2–3 anonymized LATAM profiles." },
     { n: 3, name: "Email follow-up", type: "Email", altType: "LinkedIn message", wait: 5, tip: "Short email repeating the offer. No email on file? Send a second LinkedIn message instead." },
     { n: 4, name: "Value add", type: "LinkedIn message", wait: 5, tip: "Share something useful: a relevant profile, a rate comparison or a hiring tip. No hard ask." },
     { n: 5, name: "Last note", type: "LinkedIn message", wait: 6, tip: "Close the loop: ask if they are the right person (or who is), then stop." }
   ];
   var SEQUENCE_DONE_WAIT = 7; // days after touch 5 before you are nudged to close the contact out
+  // Days to wait for a connection request to be accepted. After that, touch 2 asks whether they
+  // accepted: yes = a LinkedIn message; no ("Request pending") = an InMail, or an email if Radar has one.
+  var PENDING_DAYS = 7;
+  var PENDING_TIP = "They haven't accepted your request. Mention you sent one, pick one thing from their profile, name the open role or the harder senior seats, and offer 2–3 anonymised profiles.";
   // If the contact is already past a stage, the earlier touches are counted as done.
-  var STAGE_MIN_STEP = { "Connection sent": 1, "Connected": 1, "Message sent": 2 };
+  var STAGE_MIN_STEP = { "Connection sent": 1, "Request pending": 1, "Connected": 1, "Message sent": 2 };
   var QUIET_DAYS = 7;            // days without a reply before the app suggests a second person at the company
   var DAILY_NEW_OUTREACH = 10;   // suggested cap for new LinkedIn connection requests per day
-  var BOARD_STAGES = ["Not contacted", "Connection sent", "Connected", "Message sent", "Replied", "Meeting booked", "No response", "Not interested"];
+  var BOARD_STAGES = ["Not contacted", "Connection sent", "Request pending", "Connected", "Message sent", "Replied", "Meeting booked", "No response", "Not interested"];
   var CANDIDATE_STAGES = ["Identified", "Call booked", "Screen Approved", "Presented", "Interviewing", "Pre-Approved", "Placed", "Not Placed"];
   var PAGE_SIZE_STEP = 8;
 
@@ -334,6 +338,7 @@
     else if (type === "LinkedIn message" || type === "Email" || type === "Call") s = direction === "Inbound" ? "Replied" : "Message sent";
     else if (type === "Meeting") s = "Meeting booked";
     if (!s) return "";
+    if (current === "Request pending" && s === "Message sent") return ""; // an InMail or email doesn't connect you
     var cur = STAGE_RANK[current];
     if (cur === undefined) cur = 0;
     return STAGE_RANK[s] > cur ? s : "";
@@ -374,11 +379,29 @@
 
   /* ---- outreach sequence ---- */
 
+  // The plan for one person. Connected people follow SEQUENCE. People who never accepted the request
+  // get an InMail instead of LinkedIn messages, or emails when Radar has their address; without an
+  // email the plan ends after one last InMail, so InMail credits aren't spent on someone who never replies.
+  function planFor(c) {
+    if ((c.stage || "") !== "Request pending") return SEQUENCE;
+    var em = !!(c.email || "").trim();
+    var p = [SEQUENCE[0], { n: 2, name: em ? "First email" : "InMail", via: em ? "email" : "InMail", type: em ? "Email" : "LinkedIn message", wait: 0,
+      tip: (em ? "Email them instead of LinkedIn. " : "Send an InMail. ") + PENDING_TIP }];
+    if (em) {
+      p.push({ n: 3, name: "Email follow-up", via: "email", type: "Email", wait: 5, tip: "Short email repeating the offer." },
+        { n: 4, name: "Value add", via: "email", type: "Email", wait: 5, tip: "Share something useful: a relevant profile or a hiring tip. No hard ask." },
+        { n: 5, name: "Last note", via: "email", type: "Email", wait: 6, tip: "Close the loop: ask if they are the right person (or who is), then stop." });
+    } else {
+      p.push({ n: 3, name: "Last note", via: "InMail", type: "LinkedIn message", wait: 7, tip: "One last short InMail: close the loop and ask who the right person is, then stop. (Find their email to keep going by email instead.)" });
+    }
+    return p;
+  }
+
   function seqStep(c) {
     var n = parseInt(c.sequenceStep, 10);
     if (isNaN(n)) n = 0;
     n = Math.max(n, STAGE_MIN_STEP[c.stage] || 0); // contacts reached before this feature count as already started
-    return Math.min(SEQUENCE.length, Math.max(0, n));
+    return Math.min(planFor(c).length, Math.max(0, n));
   }
 
   // Replies and meetings pause the plan; it also ends when all five touches are done.
@@ -387,11 +410,11 @@
     return st === "Replied" || st === "Meeting booked" || st === "Not interested";
   }
 
-  function seqDone(c) { return seqStep(c) >= SEQUENCE.length || (c.stage || "") === "No response"; }
+  function seqDone(c) { return seqStep(c) >= planFor(c).length || (c.stage || "") === "No response"; }
 
   function nextTouch(c) {
     if (seqPaused(c) || seqDone(c)) return null;
-    return SEQUENCE[seqStep(c)];
+    return planFor(c)[seqStep(c)];
   }
 
   // The channel to use for a touch (touch 3 falls back to LinkedIn when there is no email).
@@ -400,7 +423,7 @@
   }
 
   function touchShort(c, t) {
-    return "Touch " + t.n + " · " + t.name + " (" + (touchType(c, t) === "Email" ? "email" : "LinkedIn") + ")";
+    return "Touch " + t.n + " · " + t.name + " (" + (t.via || (touchType(c, t) === "Email" ? "email" : "LinkedIn")) + ")";
   }
 
   function seqStageFloor(c, stage) {
@@ -414,16 +437,18 @@
     if (stage === "Replied" || stage === "No response") return cadenceFollowUp(stage, baseIso);
     if (stage === "Meeting booked") return "";
     if (step <= 0) return "";
-    if (step >= SEQUENCE.length) return addDays(baseIso, SEQUENCE_DONE_WAIT);
-    var t = SEQUENCE[step];
+    var plan = planFor({ stage: stage, email: c.email });
+    if (step >= plan.length) return addDays(baseIso, SEQUENCE_DONE_WAIT);
+    var t = plan[step];
     var wait = t.wait;
-    if (t.n === 2) wait = stage === "Connected" ? 2 : 4; // 4 days to see whether they accepted
+    if (t.n === 2 && stage === "Connection sent") wait = PENDING_DAYS; // a week to see whether they accept
     return addDays(baseIso, wait);
   }
 
   function renderSequenceBlock(l, c) {
     var step = seqStep(c);
-    var dots = SEQUENCE.map(function (t, i) {
+    var plan = planFor(c);
+    var dots = plan.map(function (t, i) {
       var cls = i < step ? "seq-dot done" : (i === step && !seqPaused(c) && !seqDone(c) ? "seq-dot now" : "seq-dot");
       return '<span class="' + cls + '" title="Touch ' + t.n + ': ' + escapeHtml(t.name) + '"></span>';
     }).join("");
@@ -433,20 +458,23 @@
       head = (c.stage === "Not interested" ? "Sequence stopped" : "Sequence paused") + " · " + escapeHtml(c.stage);
       body = c.stage === "Not interested" ? "No more messages needed." : "They replied, so the automatic plan is on hold. Handle this one by hand.";
     } else if (seqDone(c)) {
-      head = "Sequence complete · " + step + " of " + SEQUENCE.length + " touches";
-      body = (c.stage === "No response" ? "Marked as no response." : "No reply after all five touches? Mark them No response and move to someone else at the company.");
+      head = "Sequence complete · " + step + " of " + plan.length + " touches";
+      body = (c.stage === "No response" ? "Marked as no response." : "No reply after all " + plan.length + " touches? Mark them No response and move to someone else at the company.");
     } else {
-      head = "Touch " + nt.n + " of " + SEQUENCE.length + " · " + escapeHtml(nt.name);
+      head = "Touch " + nt.n + " of " + plan.length + " · " + escapeHtml(nt.name) + (nt.via === "InMail" ? " (InMail)" : "");
       body = nt.tip;
-      if (nt.n === 2 && (c.stage || "") === "Connection sent") body = "Waiting for them to accept. Set the stage to Connected when they do, or skip ahead if they never accept. " + nt.tip;
+      if (nt.n === 2 && (c.stage || "") === "Connection sent") body = "Waiting for them to accept your request. Once they do, send a short LinkedIn message. If they haven't after a week, send an InMail instead (or an email if Radar has their address).";
       if (nt.n === 3 && touchType(c, nt) !== nt.type) body = "No email on file, so send this as a second LinkedIn message. " + nt.tip;
     }
     var controls = "";
     if (!readOnly) {
+      var ask = nt && nt.n === 2 && (c.stage || "") === "Connection sent";
       controls = '<div class="seq-controls">' +
+        (ask ? '<button type="button" class="btn btn-sm" data-action="req-accepted" data-id="' + l.id + '" data-cid="' + c.id + '">They accepted</button>' +
+          '<button type="button" class="btn btn-sm" data-action="req-pending" data-id="' + l.id + '" data-cid="' + c.id + '">Still pending</button>' : '') +
         (nt ? '<button type="button" class="btn btn-sm" data-action="skip-touch" data-id="' + l.id + '" data-cid="' + c.id + '">Skip this touch</button>' : '') +
         '<label class="seq-set">Touches done <select class="mini" data-action="set-seq-step" data-id="' + l.id + '" data-cid="' + c.id + '">' +
-          [0, 1, 2, 3, 4, 5].map(function (n) { return '<option value="' + n + '"' + (n === step ? " selected" : "") + '>' + n + '</option>'; }).join("") +
+          plan.map(function (t, i) { return i; }).concat([plan.length]).map(function (n) { return '<option value="' + n + '"' + (n === step ? " selected" : "") + '>' + n + '</option>'; }).join("") +
         '</select></label>' +
       '</div>';
     }
@@ -739,7 +767,7 @@
           '<div><label>Direction</label><select ' + af("direction") + '>' + dirOpts + '</select></div>' +
           '<div><label>Date</label><input type="date" value="' + escapeHtml(f.date) + '" ' + af("date") + '></div>' +
         '</div>' +
-        (f.direction !== "Inbound" && f.type !== "Note" && seqStep(c) < SEQUENCE.length ? '<p class="af-touch">Counts as touch ' + (seqStep(c) + 1) + ' of ' + SEQUENCE.length + ' in the outreach plan.</p>' : '') +
+        (f.direction !== "Inbound" && f.type !== "Note" && seqStep(c) < planFor(c).length ? '<p class="af-touch">Counts as touch ' + (seqStep(c) + 1) + ' of ' + planFor(c).length + ' in the outreach plan.</p>' : '') +
         '<div><label>Summary</label><textarea placeholder="e.g. Sent connection request with the nearshore intro note" ' + af("summary") + '>' + escapeHtml(f.summary) + '</textarea></div>' +
         '<div class="af-grid af-grid-2">' +
           '<div><label>Move contact to stage</label><select ' + af("moveStage") + '>' + stageOpts + '</select></div>' +
@@ -1681,8 +1709,17 @@
   function leadDrafts(l, kind) {
     return (l.agentDrafts || []).filter(function (d) { return !kind || d.kind === kind; });
   }
+  // A "thanks for connecting" draft is no use for someone who never accepted, and an InMail is the
+  // wrong thing to send someone who did.
   function messageDraft(l, c, touchN) {
-    return leadDrafts(l, "message").filter(function (d) { return d.contactId === c.id && d.touch === touchN; })[0] || null;
+    var pending = (c.stage || "") === "Request pending";
+    var all = leadDrafts(l, "message").filter(function (d) { return d.contactId === c.id && d.touch === touchN; });
+    var fits = all.filter(function (d) {
+      var route = (d.meta && d.meta.route) || "";
+      if (pending) return route !== "connected" && !/^\s*(thanks|thank you)( so much)? for connecting/i.test(d.body || "");
+      return route !== "pending";
+    });
+    return fits[0] || null;
   }
 
   function agoText(iso) {
@@ -1731,9 +1768,18 @@
         if (days <= 0) {
           var whyDue = days < 0 ? "Follow-up is " + (-days) + (days === -1 ? " day" : " days") + " overdue" : "Follow-up is due today";
           var ctx = stage + (c.lastContacted ? ", last touch " + agoText(c.lastContacted) : "");
+          if (nt && nt.n === 2 && stage === "Connection sent") {
+            var sentAgo = c.lastContacted ? agoText(c.lastContacted) : "";
+            add({ key: "due-" + c.id, kind: "accept", lead: l, contact: c, owner: "you",
+              score: (days < 0 ? 90 + Math.min(-days, 10) : 70) + prioBoost(l),
+              action: "Did " + who + " accept your connection request?",
+              why: "You sent it" + (sentAgo ? " " + sentAgo : "") + ". If they accepted, touch 2 is a short LinkedIn message. If not, it's an InMail (or an email if Radar has their address).",
+              badge: '<span class="due-badge ' + dueClass(days) + '">' + dueLabel(days) + '</span>', decide: true });
+            return;
+          }
           add({ key: "due-" + c.id, kind: "due", lead: l, contact: c, owner: nt ? "both" : "you",
             score: (days < 0 ? 90 + Math.min(-days, 10) : 70) + prioBoost(l),
-            action: nt ? "Send touch " + nt.n + " (" + nt.name.toLowerCase() + ") to " + who : "Follow up with " + who,
+            action: nt ? "Send touch " + nt.n + " (" + (nt.via === "InMail" ? (nt.name === "InMail" ? "InMail" : nt.name.toLowerCase() + " by InMail") : nt.name.toLowerCase()) + ") to " + who : "Follow up with " + who,
             why: whyDue + " (" + ctx + ").",
             badge: '<span class="due-badge ' + dueClass(days) + '">' + dueLabel(days) + '</span>',
             touch: nt, draft: nt ? messageDraft(l, c, nt.n) : null, logLabel: "Log" });
@@ -1889,7 +1935,10 @@
     var open = !!draftOpen[m.key];
     var t = m.touch;
     var logBtn = "";
-    if (!readOnly && m.contact) {
+    if (!readOnly && m.contact && m.decide) {
+      logBtn = '<button class="btn btn-sm btn-primary" type="button" data-action="req-accepted" data-id="' + m.lead.id + '" data-cid="' + m.contact.id + '">They accepted</button>' +
+        '<button class="btn btn-sm" type="button" data-action="req-pending" data-id="' + m.lead.id + '" data-cid="' + m.contact.id + '">Still pending</button>';
+    } else if (!readOnly && m.contact) {
       logBtn = '<button class="btn btn-sm' + (hasPanel ? '' : ' btn-primary') + '" type="button" data-action="crm-log" data-id="' + m.lead.id + '" data-cid="' + m.contact.id + '">' + (t ? 'Log touch ' + t.n : m.logLabel || 'Log') + '</button>';
     }
     var panelBtn = hasPanel ? '<button class="btn btn-sm btn-primary" type="button" data-action="move-toggle" data-key="' + escapeHtml(m.key) + '" aria-expanded="' + open + '">' + (m.suggestions && m.suggestions.length ? (open ? 'Hide people' : 'See ' + m.suggestions.length + (m.suggestions.length === 1 ? ' person' : ' people')) : (open ? 'Hide draft' : 'Draft ready')) + '</button>' : '';
@@ -1991,8 +2040,8 @@
       '<div class="kb-card"' + (readOnly ? "" : ' draggable="true" data-drag="' + l.id + '|' + c.id + '"') + '>' +
         '<div class="kb-top"><button type="button" class="kb-name" data-action="goto-lead" data-id="' + l.id + '" title="Open ' + escapeHtml(l.company) + '">' + escapeHtml(who) + (c.isPrimary ? ' <span class="kb-star" title="First contact">★</span>' : '') + '</button>' + badge + '</div>' +
         '<div class="kb-co">' + escapeHtml(l.company) + (c.title ? ' · ' + escapeHtml(c.title) : '') + '</div>' +
-        '<div class="kb-seq" title="Outreach plan: ' + step + ' of ' + SEQUENCE.length + ' touches' + (c.lastContacted ? ', last touch ' + fmtDate(c.lastContacted) : '') + '">' +
-          SEQUENCE.map(function (t, i) { return '<span class="seq-dot' + (i < step ? ' done' : '') + '"></span>'; }).join("") +
+        '<div class="kb-seq" title="Outreach plan: ' + step + ' of ' + planFor(c).length + ' touches' + (c.lastContacted ? ', last touch ' + fmtDate(c.lastContacted) : '') + '">' +
+          planFor(c).map(function (t, i) { return '<span class="seq-dot' + (i < step ? ' done' : '') + '"></span>'; }).join("") +
           '<span>' + (c.lastContacted ? 'Last ' + fmtDate(c.lastContacted) : 'No contact yet') + '</span></div>' +
         '<div class="kb-actions">' +
           (readOnly ? "" : '<button class="btn btn-sm" type="button" data-action="crm-log" data-id="' + l.id + '" data-cid="' + c.id + '">Log</button>') +
@@ -2113,7 +2162,8 @@
         '<div class="stat' + (overdue.length + dueToday.length > 0 ? " stat-highlight" : "") + '"><div class="num mono">' + (overdue.length + dueToday.length) + '</div><div class="lbl">Contact now</div></div>' +
       '</div>';
 
-    var planText = SEQUENCE.map(function (t) { return t.n + ". " + t.name; }).join(" → ");
+    var planText = SEQUENCE.map(function (t) { return t.n + ". " + t.name; }).join(" → ") +
+      ". If someone hasn't accepted your request after " + PENDING_DAYS + " days, mark them Request pending: touch 2 becomes an InMail (or an email if Radar has their address), later touches go by email, and without an email the plan ends after one last InMail";
 
     // Next moves: one ranked list across every company, each with a reason and an owner.
     var nm = nextMoves(items);
@@ -3091,7 +3141,7 @@
   // Sequence step once this activity is saved: an outbound touch counts as one more touch.
   function stepAfterLog(c, f, stageAfter) {
     var step = Math.max(seqStep(c), STAGE_MIN_STEP[stageAfter] || 0);
-    if (f.direction !== "Inbound" && f.type !== "Note") step = Math.min(SEQUENCE.length, seqStep(c) + 1);
+    if (f.direction !== "Inbound" && f.type !== "Note") step = Math.min(planFor({ stage: stageAfter, email: c.email }).length, seqStep(c) + 1);
     return Math.max(step, STAGE_MIN_STEP[stageAfter] || 0);
   }
 
@@ -3207,7 +3257,7 @@
     if (!c) return;
     var n = parseInt(value, 10);
     if (isNaN(n)) return;
-    c.sequenceStep = Math.min(SEQUENCE.length, Math.max(0, n));
+    c.sequenceStep = Math.min(planFor(c).length, Math.max(0, n));
     var nxt = sequenceFollowUp(c, c.stage || "Not contacted", seqStep(c), todayStr());
     if (nxt) c.nextFollowUp = nxt;
     persist();
@@ -3597,6 +3647,8 @@
     if (action === "remove-contact") { removeContact(id, cid); return; }
     if (action === "set-view") { setView(t.getAttribute("data-view")); render(); return; }
     if (action === "crm-log") { openActivityForm(id, cid); render(); return; }
+    if (action === "req-accepted") { setContactStage(id, cid, "Connected"); return; }
+    if (action === "req-pending") { setContactStage(id, cid, "Request pending"); return; }
     if (action === "modal-backdrop") { if (e.target === t) { activityForm = null; render(); } return; }
     if (action === "open-activity-form") { openActivityForm(id, cid); render(); return; }
     if (action === "cancel-activity") { activityForm = null; render(); return; }
