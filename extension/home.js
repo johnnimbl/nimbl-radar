@@ -13,7 +13,8 @@
 
   // ctx: { radarUrl, popup }  popup = true opens every link in a new tab.
   function links(ctx) {
-    const radar = (p) => (ctx.radarUrl || "") + "/" + (p.inCrm ? "#crm/" + encodeURIComponent(p.leadId) : "");
+    // Radar opens the company wherever it lives (CRM card or Leads row), and the person's card when given.
+    const radar = (p) => (ctx.radarUrl || "") + "/" + (p.leadId ? "#lead/" + encodeURIComponent(p.leadId) + (p.contactId ? "/" + encodeURIComponent(p.contactId) : "") : "");
     const person = (p, label) => {
       const href = p.linkedin || radar(p);
       const sameTab = !ctx.popup && !!p.linkedin; // on LinkedIn, open the profile right here

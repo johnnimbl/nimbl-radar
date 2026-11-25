@@ -327,7 +327,8 @@
 
   function renderContact(c) {
     const lead = c.lead || {};
-    const radarLink = S.radarUrl ? (lead.inCrm ? S.radarUrl + "/#crm/" + encodeURIComponent(lead.id) : S.radarUrl + "/") : "";
+    // Radar opens the company wherever it lives (CRM card or Leads row) and scrolls to this person.
+    const radarLink = S.radarUrl ? S.radarUrl + "/#lead/" + encodeURIComponent(lead.id) + (c.id ? "/" + encodeURIComponent(c.id) : "") : "";
     const stageCls = c.stage === "Replied" || c.stage === "Meeting booked" ? "good" : c.stage === "Not contacted" ? "warn" : "teal";
     let h = '<div class="sec"><div class="row"><span class="name">' + esc(c.name) + '</span><span class="chip ' + stageCls + '">' + esc(c.stage) + "</span></div>" +
       (c.title ? '<div class="sub">' + esc(c.title) + "</div>" : "") +

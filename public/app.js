@@ -81,10 +81,12 @@
   var cardMore = false;               // client card: show the full company text instead of the short version
   var tlLimit = 12;                   // client card: how many timeline entries are showing
   var view = "leads";
+  var pendingFocus = null;            // #lead/<company>/<contact> link (e.g. from the LinkedIn extension), opened once data loads
   (function readHash() {
     var h = (window.location.hash || "").replace(/^#/, "");
     var parts = h.split("/");
     if (VIEWS.indexOf(parts[0]) !== -1) { view = parts[0]; if (view === "crm" && parts[1]) crmLeadId = decodeURIComponent(parts[1]); }
+    if (parts[0] === "lead" && parts[1]) pendingFocus = { id: decodeURIComponent(parts[1]), cid: parts[2] ? decodeURIComponent(parts[2]) : "" };
   }());
   var playbook = [];                 // research notes, objection cheat sheet, templates (see server/playbook.js)
   var pbDraft = { body: "", tag: "Research" }; // the note being written/dictated (kept outside the DOM)
@@ -779,7 +781,7 @@
       '<span class="first-suggest-wrap"><span class="first-badge first-suggest" title="Best fit by job title">★ Suggested first</span>' +
       (readOnly ? "" : '<button type="button" class="first-confirm" data-action="toggle-primary" data-id="' + l.id + '" data-cid="' + c.id + '" title="Keep ' + escapeHtml(c.name || "this person") + ' as the first contact">Confirm</button>') + '</span>' : "");
     return '' +
-      '<div class="contact-card' + (c.isPrimary ? ' is-primary' : '') + '">' +
+      '<div class="contact-card' + (c.isPrimary ? ' is-primary' : '') + '" data-contact="' + escapeHtml(c.id) + '">' +
         '<div class="contact-head">' +
           '<div class="avatar">' + escapeHtml(initialsOf(c.name)) + '</div>' +
           '<div class="ct-name-wrap"><input class="ct-name-input" type="text" value="' + escapeHtml(c.name) + '" placeholder="Contact name" data-action="edit-contact" data-field="name" data-id="' + l.id + '" data-cid="' + c.id + '"' + d + '></div>' +
@@ -3395,6 +3397,34 @@
     if (rowEl && typeof rowEl.scrollIntoView === "function") rowEl.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
+  // Open a company wherever it lives (client card if it's in the CRM, otherwise its row on the Leads tab)
+  // and bring one person's card into view.
+  function focusLead(id, cid) {
+    var l = findLead(id);
+    if (!l) {
+      try { window.history.replaceState(null, "", "#leads"); } catch (e) { /* ignore */ }
+      toast("That company isn't in Radar any more.");
+      render();
+      return;
+    }
+    if (l.inCrm) {
+      openClient(id);
+      try { window.history.replaceState(null, "", "#crm/" + encodeURIComponent(id)); } catch (e) { /* ignore */ }
+    } else {
+      gotoLead(id);
+      try { window.history.replaceState(null, "", "#leads"); } catch (e) { /* ignore */ }
+    }
+    if (!cid) return;
+    setTimeout(function () {
+      var card = null;
+      document.querySelectorAll(".contact-card[data-contact]").forEach(function (el) { if (el.getAttribute("data-contact") === cid) card = el; });
+      if (!card) return;
+      card.classList.add("ct-flash");
+      if (typeof card.scrollIntoView === "function") card.scrollIntoView({ behavior: "smooth", block: "center" });
+      setTimeout(function () { card.classList.remove("ct-flash"); }, 2600);
+    }, 120);
+  }
+
   function showMore() {
     pageSize += PAGE_SIZE_STEP;
     render();
@@ -3777,6 +3807,7 @@
       if (!loaded) return; // redirecting to login
       state = loaded;
       render();
+      if (pendingFocus) { var pf = pendingFocus; pendingFocus = null; focusLead(pf.id, pf.cid); }
       loadPlaybook();
       loadFiles();
       loadJds();
@@ -3795,6 +3826,10 @@
     stopDictation();
     view = next;
     crmLeadId = next === "crm" && parts[1] ? decodeURIComponent(parts[1]) : null;
+    if (parts[0] === "lead" && parts[1]) {
+      if (state.leads.length) focusLead(decodeURIComponent(parts[1]), parts[2] ? decodeURIComponent(parts[2]) : "");
+      return;
+    }
     if (state.leads.length) render();
   });
 

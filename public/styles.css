@@ -664,3 +664,7 @@ th.cl-col-last{white-space:nowrap;}
 .em-guesses summary{cursor:pointer;color:var(--teal);font-weight:600;}
 .em-guesses div{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:4px;}
 .em-guesses code{font-size:.74rem;overflow-wrap:anywhere;}
+
+/* A contact opened from a link (e.g. "Open in Radar" in the LinkedIn extension) */
+.contact-card.ct-flash{outline:3px solid var(--yellow);outline-offset:3px;transition:outline-color .6s;}
+@media (prefers-reduced-motion: reduce){.contact-card.ct-flash{transition:none;}}
