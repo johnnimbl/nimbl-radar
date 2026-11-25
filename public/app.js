@@ -2388,7 +2388,8 @@
     l.crmSavedAt = todayStr();
     persist();
     if (expandedId === id) expandedId = null;
-    toast(l.company + " moved to your CRM. Find it in the CRM tab.");
+    openClient(id); // go straight to its CRM card
+    toast(l.company + " saved to your CRM.");
   }
 
   function removeFromCrm(id) {
