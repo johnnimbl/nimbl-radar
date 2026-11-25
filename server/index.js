@@ -10,6 +10,7 @@ const { listPlaybook, upsertPlaybookItem, deletePlaybookItem } = require("./play
 const { listFiles, saveFile, getFile, deleteFile, MAX_FILE_BYTES } = require("./files");
 const { listJds, getJd, createJd, updateJd, deleteJd } = require("./jds");
 const { setRoleClosed, promoteRole } = require("./roles");
+const { findEmail } = require("./emailfinder");
 const { renderJobDescriptionPdf } = require("./jdpdf");
 const backup = require("./backup");
 const ext = require("./ext");
@@ -383,6 +384,17 @@ app.post("/api/leads/:id/roles/promote", ensureAuthenticated, async (req, res) =
   } catch (err) {
     if (!err.status) console.error(err);
     res.status(err.status || 500).json({ error: err.status ? err.message : "Failed to change the main role." });
+  }
+});
+
+// Find a contact's work email: the company website, then Hunter, then labelled guesses.
+app.post("/api/contacts/:id/find-email", ensureAuthenticated, async (req, res) => {
+  try {
+    const b = req.body || {};
+    res.json(await findEmail(actorPool(pool, emailOf(req)), req.params.id, { replace: b.replace === true }));
+  } catch (err) {
+    if (!err.status) console.error(err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : "Failed to look up the email." });
   }
 });
 

@@ -790,6 +790,7 @@
           (readOnly ? "" : '<button class="btn btn-ghost btn-sm" type="button" data-action="remove-contact" data-id="' + l.id + '" data-cid="' + c.id + '" aria-label="Remove contact">✕</button>') +
         '</div>' +
         renderAgentFoundNote(l, c) +
+        renderEmailFinder(l, c) +
         '<div class="ct-crm">' +
           renderSequenceBlock(l, c) +
           '<div class="ct-meta">' +
@@ -827,6 +828,80 @@
     if (c.phone) bits.push(escapeHtml(c.phone));
     return '<div class="ct-summary"><span>' + (bits.length ? bits.join(' · ') : 'No title or contact details yet') + '</span>' +
       '<button type="button" class="btn-link" data-action="ct-toggle" data-cid="' + c.id + '" aria-expanded="' + (open ? "true" : "false") + '">' + (open ? "Hide details" : (readOnly ? "Show details" : "Edit details")) + '</button></div>';
+  }
+
+  /* ---------------- Find email ---------------- */
+
+  var findingEmail = {};
+  var EMAIL_STATUS = {
+    published: { label: "Published", cls: "em-good", tip: "Published by the company or seen on public pages" },
+    verified: { label: "Verified", cls: "em-good", tip: "The company's mail server confirmed this address exists" },
+    likely: { label: "Likely", cls: "em-mid", tip: "Matches the company's email format; not confirmed" },
+    guess: { label: "Best guess, unverified", cls: "em-weak", tip: "A guess from common formats; it may bounce" },
+  };
+
+  function emailBadge(status) {
+    var s = EMAIL_STATUS[status];
+    return s ? '<span class="em-badge ' + s.cls + '" title="' + escapeHtml(s.tip) + '">' + escapeHtml(s.label) + '</span>' : "";
+  }
+
+  function renderEmailFinder(l, c) {
+    var info = c.emailInfo;
+    var busy = !!findingEmail[c.id];
+    var btn = function (label) {
+      return readOnly ? "" : '<button type="button" class="btn btn-sm" data-action="find-email" data-id="' + l.id + '" data-cid="' + c.id + '"' + (busy ? " disabled" : "") + '>' + (busy ? "Looking…" : label) + '</button>';
+    };
+    if (!info) return c.email ? "" : '<div class="em-find">' + btn("Find email") + '</div>';
+    var src = info.source ? '<span class="em-src">' + escapeHtml(info.source) +
+      (/^https?:\/\//.test(info.sourceUrl || "") ? ' <a href="' + escapeHtml(info.sourceUrl) + '" target="_blank" rel="noopener">source ↗</a>' : "") + '</span>' : "";
+    var left = typeof info.hunterLeft === "number" ? '<span class="em-left">' + info.hunterLeft + ' Hunter search' + (info.hunterLeft === 1 ? "" : "es") + ' left this month</span>' : "";
+    var notes = (info.notes || []).map(function (n) { return '<div class="em-note">' + escapeHtml(n) + '</div>'; }).join("");
+    var body;
+    if (info.email && info.email === (c.email || "").toLowerCase()) {
+      body = '<a href="mailto:' + escapeHtml(info.email) + '">' + escapeHtml(info.email) + '</a>' + emailBadge(info.status) + src;
+    } else if (info.email) {
+      body = '<span>Found <strong>' + escapeHtml(info.email) + '</strong></span>' + emailBadge(info.status) + src +
+        (readOnly ? "" : '<button type="button" class="btn-link" data-action="use-found-email" data-id="' + l.id + '" data-cid="' + c.id + '">' + (c.email ? "Replace " + escapeHtml(c.email) : "Use this") + '</button>');
+    } else {
+      body = '<span>No email found for ' + escapeHtml((c.name || "this person").split(" ")[0]) + ' at ' + escapeHtml(info.domain || "the company") + '.</span>' +
+        (info.guesses && info.guesses.length ? '<details class="em-guesses"><summary>Common formats to try (unverified)</summary><div>' +
+          info.guesses.map(function (g) { return '<code>' + escapeHtml(g) + '</code>'; }).join(" ") + '</div></details>' : "");
+    }
+    return '<div class="em-find em-box"><div class="em-row">' + body + '</div>' + notes +
+      '<div class="em-row em-foot"><span>Checked ' + escapeHtml(fmtDate((info.checkedAt || "").slice(0, 10))) + '</span>' + left + btn("Search again") + '</div></div>';
+  }
+
+  function findEmail(leadId, cid) {
+    if (pendingSave) { toast("Saving your changes first. Try again in a moment."); return; }
+    findingEmail[cid] = true; render();
+    fetch("/api/contacts/" + encodeURIComponent(cid) + "/find-email", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    }).then(function (res) {
+      if (res.status === 401) { window.location.href = "/auth/login"; return null; }
+      return res.json().catch(function () { return {}; }).then(function (b) {
+        if (!res.ok) throw new Error(b.error || ("HTTP " + res.status));
+        return fetch("/api/state").then(function (r) { return r.ok ? r.json() : null; }).then(function (fresh) { return { fresh: fresh, result: b }; });
+      });
+    }).then(function (x) {
+      delete findingEmail[cid];
+      if (!x) return;
+      if (x.fresh) { state = x.fresh; }
+      render();
+      var info = x.result.info || {};
+      var st = EMAIL_STATUS[info.status];
+      toast(info.email ? (x.result.emailSet ? "Email saved: " : "Found: ") + info.email + (st ? " (" + st.label + ")" : "") : "No email found. Radar listed the common formats to try.");
+    }).catch(function (err) {
+      delete findingEmail[cid]; render();
+      toast("Couldn't look up the email: " + (err && err.message ? err.message : "unknown error"));
+    });
+  }
+
+  function useFoundEmail(leadId, cid) {
+    var l = findLead(leadId), c = l && findContact(l, cid);
+    if (!c || !c.emailInfo || !c.emailInfo.email) return;
+    c.email = c.emailInfo.email;
+    persist();
+    toast("Email saved. It's marked " + ((EMAIL_STATUS[c.emailInfo.status] || {}).label || "found") + ".");
   }
 
   /* ---------------- Uploaded files ---------------- */
@@ -3417,6 +3492,8 @@
     if (action === "alert-seen") { markAlertsSeen(id, t.getAttribute("data-aid")); return; }
     if (action === "role-close") { setRoleClosed(id, t.getAttribute("data-role") || "", t.getAttribute("data-value") === "1"); return; }
     if (action === "role-promote") { promoteRole(id, t.getAttribute("data-role") || ""); return; }
+    if (action === "find-email") { findEmail(id, t.getAttribute("data-cid") || ""); return; }
+    if (action === "use-found-email") { useFoundEmail(id, t.getAttribute("data-cid") || ""); return; }
     if (action === "roles-closed-toggle") { rolesClosedOpen[id] = !rolesClosedOpen[id]; render(); return; }
     if (action === "file-remove") { removeFile(t.getAttribute("data-fid")); return; }
     if (action === "crm-save") { saveToCrm(id); return; }

@@ -124,6 +124,7 @@ async function getState(pool) {
       agentFound: !!c.agent_found,
       sourceUrl: c.source_url || "",
       addedBy: c.added_by || "",
+      emailInfo: c.email_info || null,
       activities: (activitiesByContact[c.id] || []).map((a) => ({
         id: a.id, type: a.type, direction: a.direction, date: dateOrEmpty(a.activity_date), summary: a.summary || "",
         author: a.author || "",
@@ -302,10 +303,11 @@ async function putState(pool, state, opts = {}) {
       written++;
       const audit = describeChanges(current, l);
       // Keep who wrote what: authors come from what is stored, never from the browser's copy.
-      const prevActs = {}, prevAdded = {}, prevNotes = {};
+      const prevActs = {}, prevAdded = {}, prevNotes = {}, prevEmailInfo = {};
       if (current) {
         for (const c of current.contacts) {
           prevAdded[c.id] = c.addedBy;
+          prevEmailInfo[c.id] = c.emailInfo;
           for (const a of c.activities) prevActs[a.id] = a.author;
         }
         for (const n of current.notes) {
@@ -353,8 +355,8 @@ async function putState(pool, state, opts = {}) {
       for (let i = 0; i < contacts.length; i++) {
         const c = contacts[i];
         await client.query(
-          `insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order, stage, next_follow_up, last_contacted, sequence_step, is_primary, agent_found, source_url, added_by)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+          `insert into contacts (id, lead_id, name, title, email, phone, linkedin, roles, sort_order, stage, next_follow_up, last_contacted, sequence_step, is_primary, agent_found, source_url, added_by, email_info)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
           [
             c.id, l.id, c.name || "", c.title || "", c.email || "", c.phone || "", c.linkedin || "", c.roles || [], i,
             CONTACT_STAGES.includes(c.stage) ? c.stage : "Not contacted",
@@ -362,6 +364,8 @@ async function putState(pool, state, opts = {}) {
             Math.min(5, Math.max(0, parseInt(c.sequenceStep, 10) || 0)), c.isPrimary === true,
             c.agentFound === true, String(c.sourceUrl || "").slice(0, 1000),
             c.id in prevAdded ? prevAdded[c.id] : actor,
+            // "Find email" results are written by the server only; the browser's copy never changes them.
+            prevEmailInfo[c.id] ? JSON.stringify(prevEmailInfo[c.id]) : null,
           ]
         );
         const acts = Array.isArray(c.activities) ? c.activities : [];

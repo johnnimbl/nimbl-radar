@@ -104,3 +104,6 @@ create table if not exists radar_users (
   last_seen timestamptz not null default now()
 );
 alter table radar_users enable row level security;
+
+-- "Find email" results for a contact: where the address came from and how sure it is.
+alter table contacts add column if not exists email_info jsonb;
