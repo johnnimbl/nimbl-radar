@@ -67,7 +67,12 @@
     let name = (document.title || "").replace(/^\(\d+\)\s*/, "").split(" | ")[0].trim();
     if (/^linkedin$/i.test(name)) name = "";
     const heads = [...main.querySelectorAll("h1, h2")];
-    let head = heads.find((h) => name && text(h) === name) || main.querySelector("h1");
+    // The heading can differ from the page title: "Jenny (Solomon) Chiczewski", "Ana Souza, PMP", emoji.
+    const words = (s) => s.replace(/\([^)]*\)/g, " ").replace(/[^\p{L}\p{M}\s'-]/gu, " ").toLowerCase().split(/\s+/).filter(Boolean);
+    const nameWords = words(name);
+    let head = heads.find((h) => name && text(h) === name) ||
+      heads.find((h) => { const hw = words(text(h)); return nameWords.length > 0 && hw.length <= nameWords.length + 4 && nameWords.every((w) => hw.includes(w)); }) ||
+      main.querySelector("h1");
     if (!name && head) name = text(head);
     if (!name || !head) return null;
     // the top card: the nearest ancestor that also holds the "Contact info" link (or a few lines of text)
@@ -80,7 +85,7 @@
       .filter((e) => !e.querySelector("p"))
       .map((e) => text(e))
       .filter((t, i, a) => t && a.indexOf(t) === i)
-      .filter((t) => t !== name && !/^·?\s*(1st|2nd|3rd\+?|3rd)$/i.test(t) && t !== "·" && !/^contact info$/i.test(t) &&
+      .filter((t) => t !== name && t !== text(head) && !/^·?\s*(1st|2nd|3rd\+?|3rd)$/i.test(t) && t !== "·" && !/^contact info$/i.test(t) &&
         !/connections?$/i.test(t) && !/mutual connection/i.test(t) && !/^\(?(he|she|they|ze|xe)\/\w+\)?$/i.test(t));
     const title = lines[0] || "";
     const location = lines.slice(1).find((t) => /,/.test(t) && t.length < 80) || "";
