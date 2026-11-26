@@ -1903,7 +1903,7 @@
     var text = draftEdits[d.id] !== undefined ? draftEdits[d.id] : d.body;
     var isNote = d.touch === 1;
     var len = text.length;
-    var limit = isNote ? 200 : 0;
+    var limit = isNote ? 300 : 0; // LinkedIn Premium allows 300 characters in a connection note
     return '<div class="mv-draft">' +
       '<div class="mv-draft-head"><span class="cc-lbl">Draft ' + (isNote ? "connection note" : "message") + ' · prepared ' + fmtDate(d.createdAt) + '</span>' +
         '<span class="mv-count' + (limit && len > limit ? ' over' : '') + '">' + len + (limit ? ' / ' + limit : '') + ' characters</span></div>' +

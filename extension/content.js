@@ -6,7 +6,7 @@
   if (window.__nimblRadar) return;
   window.__nimblRadar = true;
 
-  const CONN_LIMIT = 200;
+  const CONN_LIMIT = 300; // LinkedIn Premium connection notes
   const HOME_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 7.2 8 2l6 5.2V14H9.7v-4H6.3v4H2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
   const TOUCH_LABEL = { 1: "Connection note", 2: "First message", 3: "Follow-up", 4: "Value add", 5: "Last note" };
 
