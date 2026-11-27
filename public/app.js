@@ -1461,6 +1461,10 @@
           '<div><label>Birthdate</label><input type="date" value="' + escapeHtml(k.birthdate) + '" ' + f("contractor.birthdate") + '></div>' +
           '<div><label>Start date</label><input type="date" value="' + escapeHtml(k.startDate) + '" ' + f("contractor.startDate") + '></div>' +
         '</div>' +
+        '<div class="field-row">' +
+          '<div><label>Contract end date</label><input type="date" value="' + escapeHtml(k.endDate || "") + '" ' + f("contractor.endDate") + '></div>' +
+          '<div></div>' +
+        '</div>' +
         '<h5>Contractor documents</h5>' +
         '<div>' + docsHtml + '</div>' +
         (readOnly ? "" : '<div class="add-note"><input type="text" id="cdoc-input-' + l.id + '-' + c.id + '" placeholder="Document name, e.g. SOW pertains to contractor" style="flex:1;border:1px solid var(--ink);background:var(--surface);color:var(--ink);border-radius:8px;padding:6px 9px;font-size:.8rem;font-family:inherit;"><button class="btn btn-sm" type="button" data-action="add-candidate-document" data-id="' + l.id + '" data-cid="' + c.id + '">Add</button></div>') +
@@ -1823,6 +1827,34 @@
         badge: '<span class="due-badge due-overdue">' + (fresh.length === 1 ? 'New role' : fresh.length + ' new roles') + '</span>', logLabel: "Log" });
     });
 
+    // 3b. Clients: check-ins that are due, and placements whose contract is ending.
+    crmLeads().forEach(function (l) {
+      if (l.status !== "Won" || (!leadsInView[l.id] && (l.contacts || []).length)) return;
+      var main = firstContact(l);
+      var mainName = main ? (main.name || "your contact") : "";
+      var ci = l.clientInfo || {};
+      if (isIsoDate(ci.nextCheckIn) && ci.nextCheckIn <= today) {
+        var od = diffDays(ci.nextCheckIn, today);
+        var placedN = placedCandidates(l).length;
+        moves.push({ key: "checkin-" + l.id, kind: "checkin", lead: l, contact: main && !main.owner ? main : null, owner: "you",
+          score: 75 + Math.min(-od, 10) + prioBoost(l),
+          action: main && main.owner ? "Client check-in at " + l.company + " (" + mainName + " is " + main.owner + "'s contact)" : "Check in with " + (mainName || l.company) + " at " + l.company,
+          why: "The check-in date you set" + (placedN ? ". " + placedN + (placedN === 1 ? " person placed" : " people placed") + " there" : "") + ". Ask how it's going and whether more roles are coming.",
+          badge: '<span class="due-badge ' + dueClass(od) + '">' + dueLabel(od) + '</span>', logLabel: "Log" });
+      }
+      placedCandidates(l).forEach(function (c) {
+        var end = (c.contractor || {}).endDate;
+        if (!isIsoDate(end)) return;
+        var left = diffDays(end, today);
+        if (left > 30 || left < -14) return;
+        moves.push({ key: "contract-" + c.id, kind: "contract", lead: l, contact: main && !main.owner ? main : null, owner: "you",
+          score: 78 + (left <= 7 ? 8 : 0) + prioBoost(l),
+          action: (c.name || "A placement") + "'s contract at " + l.company + (left >= 0 ? " ends " + fmtDate(end) : " ended " + fmtDate(end)),
+          why: "Talk to " + (mainName || "the client") + (main && main.owner ? " (through " + main.owner + ")" : "") + " about extending it, or line up the next person.",
+          badge: '<span class="due-badge ' + (left <= 7 ? 'due-overdue' : 'due-soon') + '">' + (left >= 0 ? left + 'd left' : 'Ended') + '</span>', logLabel: "Log" });
+      });
+    });
+
     // 4. Companies gone quiet: reach a second person
     secondContactPrompts().forEach(function (x) {
       if (!leadsInView[x.lead.id]) return;
@@ -1909,6 +1941,7 @@
         '<span class="mv-count' + (limit && len > limit ? ' over' : '') + '">' + len + (limit ? ' / ' + limit : '') + ' characters</span></div>' +
       '<textarea class="mv-text" data-action="draft-edit" data-did="' + escapeHtml(d.id) + '" rows="' + (isNote ? 3 : 6) + '">' + escapeHtml(text) + '</textarea>' +
       (d.meta && d.meta.why ? '<div class="mv-agent">' + escapeHtml(d.meta.why) + '</div>' : '') +
+      draftContext(m, d) +
       '<div class="mv-draft-act">' +
         '<button type="button" class="btn btn-sm btn-primary" data-action="draft-copy" data-did="' + escapeHtml(d.id) + '">Copy</button>' +
         (m.contact && /^https?:\/\//.test(m.contact.linkedin || "") ? '<a class="btn btn-sm" href="' + escapeHtml(m.contact.linkedin) + '" target="_blank" rel="noopener">Open LinkedIn ↗</a>' : '') +
@@ -2201,6 +2234,7 @@
         '<p class="pace">' + (roomToday > 0 ? 'Room for ' + roomToday + ' more new connection request' + (roomToday === 1 ? '' : 's') + ' today. Spreading them across days keeps your LinkedIn account safe.' : 'You have sent ' + sentToday + ' new connection requests today. That is plenty; come back tomorrow.') + '</p>' +
         '<details class="plan-help"><summary>How the five-touch plan works</summary><p>' + escapeHtml(planText) + '. Follow-up dates come from that plan and you can always change one. A reply pauses the plan.</p></details>' +
       '</div>' +
+      renderTeamPanel() +
       '<div class="crm-section"><div class="sec-head"><h3>Pipeline</h3><span class="sec-note">' + (readOnly ? "" : "Drag a card or use its menu to move a contact. ") + 'Lost and Not a Fit companies are hidden.</span></div>' + renderBoard(items) + '</div>' +
       renderRecentActivity();
   }
@@ -2655,6 +2689,184 @@
     return '<section class="cc-sec hist">' + head + body + '</section>';
   }
 
+  /* ---------------- Deal progress (milestones) ---------------- */
+
+  // How far a company has come. Most milestones tick themselves from what Radar already knows;
+  // "Need confirmed" (and any milestone you want to mark early) is ticked by hand.
+  function candidatesAtLeast(l, stage) {
+    var min = CANDIDATE_STAGES.indexOf(stage);
+    return (l.candidates || []).some(function (c) { return CANDIDATE_STAGES.indexOf(c.stage) >= min; });
+  }
+  var MILESTONES = [
+    { k: "dm", label: "Decision-maker found", how: "a first contact or a senior title on file",
+      auto: function (l) { return (l.contacts || []).some(function (c) { return c.isPrimary || titleScore(c.title) >= 3; }); } },
+    { k: "talk", label: "In conversation", how: "someone replied",
+      auto: function (l) { return (l.contacts || []).some(function (c) { return c.stage === "Replied" || c.stage === "Meeting booked" || (c.activities || []).some(function (a) { return a.direction === "Inbound" && a.type !== "Note"; }); }); } },
+    { k: "need", label: "Need confirmed", how: "", auto: null },
+    { k: "call", label: "Intro call held", how: "a meeting or call is logged",
+      auto: function (l) { return (l.contacts || []).some(function (c) { return c.stage === "Meeting booked" || (c.activities || []).some(function (a) { return a.type === "Meeting" || a.type === "Call"; }); }); } },
+    { k: "profiles", label: "Profiles shared", how: "a candidate reached Presented",
+      auto: function (l) { return candidatesAtLeast(l, "Presented"); } },
+    { k: "interview", label: "Interviewing", how: "a candidate reached Interviewing",
+      auto: function (l) { return (l.candidates || []).some(function (c) { return ["Interviewing", "Pre-Approved", "Placed"].indexOf(c.stage) !== -1; }); } },
+    { k: "placed", label: "First placement", how: "a candidate is Placed",
+      auto: function (l) { return (l.candidates || []).some(function (c) { return c.stage === "Placed"; }); } }
+  ];
+  function milestoneDone(l, m) {
+    var manual = l.clientInfo && l.clientInfo.milestones && l.clientInfo.milestones[m.k];
+    var auto = m.auto ? m.auto(l) : false;
+    return { done: !!(auto || manual), auto: auto, date: manual || "" };
+  }
+  function milestoneCount(l) { return MILESTONES.filter(function (m) { return milestoneDone(l, m).done; }).length; }
+
+  function renderMilestones(l) {
+    var n = milestoneCount(l);
+    return '<div class="ms"><div class="cc-lbl">Deal progress · ' + n + ' of ' + MILESTONES.length + '</div><div class="ms-strip">' +
+      MILESTONES.map(function (m) {
+        var st = milestoneDone(l, m);
+        var title = st.auto ? "Ticked automatically: " + m.how : (st.done ? "Ticked by hand" + (st.date ? " on " + fmtDate(st.date) : "") + ". Click to untick." : "Click to tick" + (m.how ? " (or it ticks itself when " + m.how + ")" : ""));
+        return '<button type="button" class="ms-chip' + (st.done ? ' ms-done' : '') + (st.auto ? ' ms-auto' : '') + '" data-action="ms-toggle" data-id="' + l.id + '" data-key="' + m.k + '" title="' + escapeHtml(title) + '"' +
+          (readOnly || st.auto ? ' disabled' : '') + ' aria-pressed="' + st.done + '"><span aria-hidden="true">' + (st.done ? '✓' : '○') + '</span>' + escapeHtml(m.label) + '</button>';
+      }).join("") + '</div></div>';
+  }
+
+  function toggleMilestone(id, key) {
+    var l = findLead(id);
+    if (!l) return;
+    l.clientInfo = l.clientInfo || emptyClientInfoLocal();
+    var ms = Object.assign({}, l.clientInfo.milestones || {});
+    if (ms[key]) delete ms[key]; else ms[key] = todayStr();
+    l.clientInfo.milestones = ms;
+    persist();
+  }
+  function emptyClientInfoLocal() { return { address: "", phone: "", taxId: "", currency: "USD", linkedin: "" }; }
+
+  /* ---------------- Client account (Won companies) ---------------- */
+
+  function monthsSince(iso) {
+    if (!isIsoDate(iso)) return null;
+    var d = diffDays(todayStr(), iso);
+    return d < 0 ? null : Math.floor(d / 30.4);
+  }
+
+  function placedCandidates(l) { return (l.candidates || []).filter(function (c) { return c.stage === "Placed"; }); }
+
+  function openRoleCount(l) {
+    var n = (l.jobTitle || l.jobUrl) && !l.jobClosedAt ? 1 : 0;
+    return n + (l.roleAlerts || []).filter(function (a) { return !a.closedAt; }).length;
+  }
+
+  function renderAccountPanel(l) {
+    var d = readOnly ? " disabled" : "";
+    var placed = placedCandidates(l);
+    var inProcess = (l.candidates || []).filter(function (c) { return c.stage !== "Placed" && c.stage !== "Not Placed"; });
+    var main = firstContact(l);
+    var ci = l.clientInfo || {};
+    var last = leadLastActivity(l);
+    var today = todayStr();
+    var due = isIsoDate(ci.nextCheckIn) && ci.nextCheckIn <= today;
+    var placedHtml = placed.length ? placed.map(function (c) {
+      var k = c.contractor || {};
+      var start = k.startDate || "";
+      var mo = monthsSince(start);
+      var end = k.endDate || "";
+      var endDays = isIsoDate(end) ? diffDays(end, today) : null;
+      return '<div class="acc-row">' +
+        '<div class="acc-who"><strong>' + escapeHtml(c.name || "(no name)") + '</strong>' + ((k.jobTitle || c.jobTitle) ? ' · ' + escapeHtml(k.jobTitle || c.jobTitle) : '') + '</div>' +
+        '<div class="acc-meta">' + (start ? 'Started ' + fmtDate(start) + (mo !== null ? ' · ' + (mo === 0 ? 'under a month' : mo + (mo === 1 ? ' month' : ' months')) : '') : 'Start date not set') +
+          (endDays !== null ? ' · <span class="' + (endDays <= 30 ? 'acc-warn' : '') + '">Contract ends ' + fmtDate(end) + (endDays >= 0 ? ' (' + endDays + 'd)' : ' (ended)') + '</span>' : '') + '</div>' +
+        (readOnly ? '' : '<label class="acc-end">Contract end <input type="date" value="' + escapeHtml(end) + '" data-action="edit-candidate-field" data-field="contractor.endDate" data-id="' + l.id + '" data-cid="' + c.id + '"></label>') +
+      '</div>';
+    }).join("") : '<p class="acc-empty">Nobody placed yet. Add your placement under Candidate pipeline below and set them to Placed.</p>';
+    return '<section class="cc-sec acc"><h3>Client account</h3>' +
+      '<div class="acc-stats">' +
+        '<div><span class="mono">' + placed.length + '</span> placed</div>' +
+        '<div><span class="mono">' + inProcess.length + '</span> in process</div>' +
+        '<div><span class="mono">' + openRoleCount(l) + '</span> open role' + (openRoleCount(l) === 1 ? '' : 's') + '</div>' +
+        '<div>Last touch <strong>' + (last ? fmtDate(last) : 'none') + '</strong></div>' +
+      '</div>' +
+      '<div class="acc-main">' +
+        (main ? '<div class="acc-contact">Main contact: <strong>' + escapeHtml(main.name || "(unnamed)") + '</strong>' + (main.title ? ' · ' + escapeHtml(main.title) : '') +
+          (main.owner ? ' <span class="owner-badge">' + escapeHtml(main.owner) + '\'s contact</span>' : '') + '</div>' : '') +
+        '<label class="acc-check">Next check-in <input type="date" value="' + escapeHtml(ci.nextCheckIn || "") + '" data-action="set-checkin" data-id="' + l.id + '"' + d + '>' +
+          (due ? '<span class="due-badge due-overdue">Due</span>' : '') + '</label>' +
+      '</div>' +
+      '<h4>Placed</h4>' + placedHtml +
+    '</section>';
+  }
+
+  function setCheckIn(id, value) {
+    var l = findLead(id);
+    if (!l) return;
+    l.clientInfo = l.clientInfo || emptyClientInfoLocal();
+    l.clientInfo.nextCheckIn = isIsoDate(value) ? value : "";
+    persist();
+  }
+
+  /* ---------------- Team view ---------------- */
+
+  function teamStats(days) {
+    var since = addDays(todayStr(), -days);
+    var people = {};
+    state.leads.forEach(function (l) {
+      (l.contacts || []).forEach(function (c) {
+        (c.activities || []).forEach(function (a) {
+          var who = String(a.author || "").toLowerCase();
+          if (who.indexOf("@") === -1 || !a.date || a.date < since || a.type === "Note") return;
+          var p = people[who] = people[who] || { who: who, requests: 0, messages: 0, replies: 0, meetings: 0, reached: {}, replied: {} };
+          if (a.direction === "Inbound") { p.replies++; p.replied[c.id] = true; }
+          else if (a.type === "LinkedIn connection") { p.requests++; p.reached[c.id] = true; }
+          else if (a.type === "Meeting") p.meetings++;
+          else { p.messages++; p.reached[c.id] = true; }
+        });
+      });
+    });
+    return Object.keys(people).map(function (k) { return people[k]; });
+  }
+
+  function renderTeamPanel() {
+    var week = teamStats(7), month = teamStats(30);
+    if (!month.length) return "";
+    var byWho = {};
+    month.forEach(function (p) { byWho[p.who] = { month: p, week: null }; });
+    week.forEach(function (p) { (byWho[p.who] = byWho[p.who] || { month: null }).week = p; });
+    var rows = Object.keys(byWho).sort().map(function (who) {
+      var w = byWho[who].week || { requests: 0, messages: 0, replies: 0, meetings: 0 };
+      var m = byWho[who].month;
+      var reached = m ? Object.keys(m.reached).length : 0;
+      var replied = m ? Object.keys(m.replied).filter(function (id) { return m.reached[id]; }).length : 0;
+      var rate = reached ? Math.round(100 * replied / reached) + '%' : '–';
+      var name = whoName(who);
+      return '<tr><th scope="row">' + escapeHtml(name === "you" ? "You" : name) + '</th><td class="mono">' + w.requests + '</td><td class="mono">' + w.messages + '</td><td class="mono">' + w.replies + '</td><td class="mono">' + w.meetings + '</td>' +
+        '<td class="mono" title="' + replied + ' of ' + reached + ' people reached in the last 30 days replied">' + rate + '</td></tr>';
+    }).join("");
+    return '<div class="crm-section"><div class="sec-head"><h3>Team</h3><span class="sec-note">This week, by who logged it. Reply rate covers the last 30 days.</span></div>' +
+      '<div class="table-wrap team-table"><table><thead><tr><th>Who</th><th>Requests</th><th>Messages</th><th>Replies</th><th>Meetings</th><th>Reply rate</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }
+
+  /* ---------------- Content in context (next to a draft) ---------------- */
+
+  function draftContext(m, d) {
+    var pending = m.contact && (m.contact.stage || "") === "Request pending";
+    var tpls = playbook.filter(function (p) {
+      if (p.kind !== "template" || !(p.body || "").trim()) return false;
+      if (pending && d.touch === 2) return p.id === "tpl-inmail-pending";
+      if (p.id === "tpl-inmail-pending") return false;
+      return d.touch > 0 && new RegExp("^Touch " + d.touch + "\\b").test(p.tag || "");
+    }).slice(0, 2);
+    var ready = leadJds(m.lead.id).filter(function (j) { return j.status === "ready"; });
+    if (!tpls.length && !ready.length) return "";
+    return '<div class="mv-ctx">' +
+      tpls.map(function (t) {
+        return '<details class="mv-tpl"><summary>Playbook: ' + escapeHtml(t.title || t.tag) + '</summary><div class="mv-tpl-body">' + escapeHtml(t.body) + '</div>' +
+          (readOnly ? '' : '<button type="button" class="btn-link" data-action="tpl-use" data-did="' + escapeHtml(d.id) + '" data-tid="' + escapeHtml(t.id) + '">Put this in the draft box</button>') + '</details>';
+      }).join("") +
+      (ready.length ? '<div class="mv-jds"><span class="cc-lbl">Job descriptions to attach</span> ' + ready.map(function (j) {
+        return '<a href="/api/job-descriptions/' + encodeURIComponent(j.id) + '/pdf" target="_blank" rel="noopener">' + escapeHtml(jdTitle(j)) + ' (PDF) ↗</a>';
+      }).join(" ") + '</div>' : '') +
+    '</div>';
+  }
+
   function renderClientCard(l) {
     var d = readOnly ? " disabled" : "";
     var statusGroups = [
@@ -2735,7 +2947,9 @@
           '<div class="cc-ctl"><div class="cc-lbl">Status</div><div class="seg-wrap">' + statusHtml + '</div></div>' +
           '<div class="cc-ctl"><div class="cc-lbl">Priority</div>' + prioHtml + '</div>' +
         '</div>' +
+        renderMilestones(l) +
         '<div class="cc-next"><div class="cc-lbl">Next step</div><div class="ns-row">' + nextHtml + '</div></div>' +
+        (isWon ? renderAccountPanel(l) : '') +
         '<div class="cc-grid">' +
           '<div class="cc-main">' +
             '<section class="cc-sec"><h3>People &amp; outreach plan</h3>' + people + '</section>' +
@@ -3327,7 +3541,7 @@
     l.candidates.push({
       id: "cd" + Date.now().toString(36), name: "", jobTitle: l.jobTitle || "", linkedin: "", email: "", phone: "", country: "", stage: "Identified",
       notes: [],
-      contractor: { firstName: "", middleName: "", lastName: "", gender: "", payMethod: "", jobTitle: "", paymentRefTemplate: "", mainTask: "", companyName: "", companyTaxId: "", companyAddress: "", companyType: "", birthdate: "", startDate: "" },
+      contractor: { firstName: "", middleName: "", lastName: "", gender: "", payMethod: "", jobTitle: "", paymentRefTemplate: "", mainTask: "", companyName: "", companyTaxId: "", companyAddress: "", companyType: "", birthdate: "", startDate: "", endDate: "" },
       documents: []
     });
     persist();
@@ -3648,6 +3862,12 @@
     if (action === "remove-contact") { removeContact(id, cid); return; }
     if (action === "set-view") { setView(t.getAttribute("data-view")); render(); return; }
     if (action === "crm-log") { openActivityForm(id, cid); render(); return; }
+    if (action === "ms-toggle") { toggleMilestone(id, t.getAttribute("data-key")); return; }
+    if (action === "tpl-use") {
+      var tp = playbook.filter(function (p) { return p.id === t.getAttribute("data-tid"); })[0];
+      if (tp) { draftEdits[t.getAttribute("data-did")] = tp.body; render(); toast("Template copied into the draft box. Fill in the details before sending."); }
+      return;
+    }
     if (action === "req-accepted") { setContactStage(id, cid, "Connected"); return; }
     if (action === "req-pending") { setContactStage(id, cid, "Request pending"); return; }
     if (action === "modal-backdrop") { if (e.target === t) { activityForm = null; render(); } return; }
@@ -3732,6 +3952,7 @@
     if (action === "crm-sort") { crmSort = t.value; crmSortDesc = false; saveCrmView(); render(); return; }
     if (action === "set-contact-stage") { setContactStage(id, cid, t.value); return; }
     if (action === "set-followup") { setFollowUp(id, cid, t.value); return; }
+    if (action === "set-checkin") { setCheckIn(id, t.value); return; }
     if (action === "set-seq-step") { setSeqStep(id, cid, t.value); return; }
     if (action === "pb-tag") { pbDraft.tag = t.value; return; }
     if (action === "pb-lang") {

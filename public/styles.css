@@ -672,3 +672,63 @@ th.cl-col-last{white-space:nowrap;}
 /* Someone else's relationship (e.g. Brian's client contact) */
 .owner-badge{font-size:.66rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);border:1px dashed var(--ink-soft);border-radius:999px;padding:2px 8px;white-space:nowrap;}
 .owner-note{font-size:.78rem;line-height:1.45;color:var(--ink-soft);padding:8px 10px;border:1px dashed var(--muted);border-radius:8px;background:var(--paper);}
+
+/* Deal progress */
+.ms{background:var(--surface);border:1px solid var(--ink);border-radius:12px;padding:12px 16px;}
+.ms-strip{display:flex;flex-wrap:wrap;gap:6px;}
+.ms-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;border:1px dashed var(--muted);background:var(--paper);color:var(--ink-soft);font-size:.74rem;font-weight:600;cursor:pointer;font-family:inherit;}
+.ms-chip:hover:not([disabled]){border-style:solid;color:var(--ink);}
+.ms-chip.ms-done{border:1px solid var(--good);background:#eef6f0;color:var(--good);}
+.ms-chip.ms-auto{cursor:default;}
+.ms-chip[disabled]{opacity:1;}
+.ms-chip:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
+
+/* Client account */
+.acc{border-width:2px;}
+.acc-stats{display:flex;flex-wrap:wrap;gap:8px 22px;font-size:.82rem;color:var(--ink-soft);margin:6px 0 12px;}
+.acc-stats .mono{font-size:1.15rem;color:var(--ink);font-weight:700;margin-right:2px;}
+.acc-main{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;font-size:.82rem;margin-bottom:12px;}
+.acc-check{display:flex;align-items:center;gap:8px;font-size:.78rem;color:var(--ink-soft);margin:0;}
+.acc-check input,.acc-end input{border:1px solid var(--ink);background:var(--paper);color:var(--ink);border-radius:8px;padding:4px 7px;font-size:.78rem;font-family:inherit;}
+.acc h4{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);margin:4px 0 6px;}
+.acc-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;padding:8px 0;border-top:1px solid #ece6da;font-size:.82rem;}
+.acc-who{min-width:0;overflow-wrap:anywhere;}
+.acc-meta{color:var(--ink-soft);font-size:.78rem;}
+.acc-warn{color:var(--critical);font-weight:700;}
+.acc-end{display:flex;align-items:center;gap:6px;font-size:.74rem;color:var(--ink-soft);margin:0 0 0 auto;}
+.acc-empty{color:var(--ink-soft);font-size:.8rem;margin:0;}
+
+/* Team */
+.team-table table{width:100%;border-collapse:collapse;font-size:.82rem;}
+.team-table th,.team-table td{padding:8px 12px;text-align:right;border-bottom:1px solid #ece6da;}
+.team-table th:first-child,.team-table tbody th{text-align:left;}
+.team-table thead th{font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);}
+
+/* Content next to a draft */
+.mv-ctx{display:flex;flex-direction:column;gap:6px;margin:8px 0;}
+.mv-tpl summary{cursor:pointer;color:var(--teal);font-weight:600;font-size:.78rem;}
+.mv-tpl-body{white-space:pre-wrap;font-size:.78rem;line-height:1.45;background:var(--paper);border:1px dashed var(--muted);border-radius:8px;padding:8px 10px;margin:6px 0;}
+.mv-jds{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;font-size:.78rem;}
+.mv-jds .cc-lbl{margin:0;}
+
+/* Phone: a compact header and tabs that stay in reach while you scroll */
+@media (max-width:560px){
+  #app{padding:14px 14px 72px;}
+  .topbar{gap:10px;margin-bottom:12px;align-items:center;}
+  .brand{gap:10px;}
+  .brand-logo{height:28px;}
+  .brand h1{font-size:1.15rem;}
+  .brand .tag,.scan-meta{display:none;}
+  .topbar-right{gap:8px;width:100%;}
+  .topbar-right .btn{padding:7px 12px;font-size:.76rem;}
+  .user-chip span{max-width:90px;}
+  .viewtabs{position:sticky;top:0;z-index:20;background:var(--paper);margin:0 -14px 14px;padding:6px 14px 0;overflow-x:auto;}
+  .viewtab{white-space:nowrap;}
+  .stats .stat{padding:12px 14px;}
+  .stats .num{font-size:1.5rem;}
+  .mv{grid-template-columns:minmax(0,1fr);gap:6px;}
+  .mv-btns{justify-content:flex-start;}
+  .ms{padding:10px 12px;}
+  .acc-end{margin-left:0;}
+  .team-table th,.team-table td{padding:7px 8px;}
+}

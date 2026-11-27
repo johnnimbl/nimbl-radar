@@ -19,7 +19,7 @@ function emptyContractor() {
   return {
     firstName: "", middleName: "", lastName: "", gender: "", payMethod: "",
     jobTitle: "", paymentRefTemplate: "", mainTask: "", companyName: "",
-    companyTaxId: "", companyAddress: "", companyType: "", birthdate: "", startDate: "",
+    companyTaxId: "", companyAddress: "", companyType: "", birthdate: "", startDate: "", endDate: "",
   };
 }
 
