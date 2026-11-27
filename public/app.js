@@ -2278,7 +2278,11 @@
   function crmLeads() { return state.leads.filter(function (l) { return l.inCrm; }); }
 
   // New openings the daily scan found at a company that is already in the CRM.
-  function unseenAlerts(l) { return (l.roleAlerts || []).filter(function (a) { return !a.seen && !a.closedAt; }); }
+  // A role only counts as "new" when it was posted recently (or the date is unknown). The scan can
+  // find a posting months after it went up; that one still shows under Roles, just not as new.
+  var NEW_ROLE_DAYS = 45;
+  function alertIsRecent(a) { var d = isIsoDate(a.datePosted) ? daysSince(a.datePosted) : null; return d === null || d <= NEW_ROLE_DAYS; }
+  function unseenAlerts(l) { return (l.roleAlerts || []).filter(function (a) { return !a.seen && !a.closedAt && alertIsRecent(a); }); }
 
   // Roles: the one a company was saved with, plus roles found since. A posting older than this is
   // probably closed, so it's flagged and moved below the fresher roles until someone checks it.
@@ -3016,7 +3020,7 @@
           '<div><h2>' + escapeHtml(l.company) + '</h2><div class="cc-sub">Saved ' + fmtDate(l.crmSavedAt) + (l.estSize ? ' · ' + escapeHtml(shortText(l.estSize, 40)) : '') + (companyLinkedin(l) ? ' · ' + linkedinLink(l) : '') + '</div></div>' +
         '</header>' +
         (unseenAlerts(l).length ? '<section class="nr-panel" aria-label="New roles posted">' +
-          '<div class="nr-head"><span class="cc-lbl">New role' + (unseenAlerts(l).length === 1 ? '' : 's') + ' posted since you saved this company</span>' +
+          '<div class="nr-head"><span class="cc-lbl">New role' + (unseenAlerts(l).length === 1 ? '' : 's') + ' posted recently</span>' +
           (unseenAlerts(l).length > 1 && !readOnly ? '<button type="button" class="btn-link" data-action="alert-seen" data-id="' + l.id + '">Mark all as seen</button>' : '') + '</div>' +
           unseenAlerts(l).map(function (a) { return renderAlertLine(l, a, true); }).join("") +
         '</section>' : '') +

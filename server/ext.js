@@ -315,7 +315,7 @@ async function home(pool, opts = {}) {
     q(`select id, company, job_title, priority, date_added, in_crm from leads
         where date_added > current_date - 7 order by date_added desc, (priority = 'High') desc, company`),
     q(`select a.lead_id, l.company, a.job_title, a.job_url, a.found_at from role_alerts a join leads l on l.id = a.lead_id
-        where a.seen_at is null and a.closed_at is null and a.promoted_at is null and ${OPEN} order by a.found_at desc`),
+        where a.seen_at is null and a.closed_at is null and a.promoted_at is null and (a.date_posted is null or a.date_posted >= current_date - 45) and ${OPEN} order by a.found_at desc`),
     q(`select case when activity_date > current_date - 7 then 'this' else 'last' end as wk,
               count(*) filter (where type = 'LinkedIn connection' and direction = 'Outbound') connections,
               count(*) filter (where type in ('LinkedIn message','Email','Call') and direction = 'Outbound') messages,
