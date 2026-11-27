@@ -1901,6 +1901,16 @@
     });
     starts.forEach(function (i) {
       var l = i.lead, c = i.contact;
+      var d1 = messageDraft(l, c, 1);
+      if (isInmailDraft(d1)) {
+        add({ key: "start-" + c.id, kind: "start", lead: l, contact: c, owner: "both",
+          score: 35 + prioBoost(l) + 4,
+          action: "Send an InMail to " + (c.name || "(unnamed contact)"),
+          why: "LinkedIn won't take a connection request for them, so the first touch is an InMail. Nobody at " + l.company + " has been approached yet.",
+          badge: '<span class="due-badge due-soon">Not started</span>',
+          touch: null, draft: d1, logLabel: "Log InMail", paced: true });
+        return;
+      }
       var rd = daysSince(l.datePosted);
       var bits = [l.priority + " priority"];
       if (rd !== null) bits.push("role posted " + (rd <= 0 ? "today" : rd + "d ago"));
@@ -1953,11 +1963,12 @@
   function renderDraftPanel(m) {
     var d = m.draft;
     var text = draftEdits[d.id] !== undefined ? draftEdits[d.id] : d.body;
-    var isNote = d.touch === 1;
+    var inmail = isInmailDraft(d);
+    var isNote = d.touch === 1 && !inmail;
     var len = text.length;
     var limit = isNote ? 300 : 0; // LinkedIn Premium allows 300 characters in a connection note
     return '<div class="mv-draft">' +
-      '<div class="mv-draft-head"><span class="cc-lbl">Draft ' + (isNote ? "connection note" : "message") + ' · prepared ' + fmtDate(d.createdAt) + '</span>' +
+      '<div class="mv-draft-head"><span class="cc-lbl">Draft ' + (inmail ? "InMail" : isNote ? "connection note" : "message") + ' · prepared ' + fmtDate(d.createdAt) + '</span>' +
         '<span class="mv-count' + (limit && len > limit ? ' over' : '') + '">' + len + (limit ? ' / ' + limit : '') + ' characters</span></div>' +
       '<textarea class="mv-text" data-action="draft-edit" data-did="' + escapeHtml(d.id) + '" rows="' + (isNote ? 3 : 6) + '">' + escapeHtml(text) + '</textarea>' +
       (d.meta && d.meta.why ? '<div class="mv-agent">' + escapeHtml(d.meta.why) + '</div>' : '') +
@@ -3423,6 +3434,8 @@
   function stepAfterLog(c, f, stageAfter) {
     var step = Math.max(seqStep(c), STAGE_MIN_STEP[stageAfter] || 0);
     if (f.direction !== "Inbound" && f.type !== "Note") step = Math.min(planFor({ stage: stageAfter, email: c.email }).length, seqStep(c) + 1);
+    // An InMail sent because a connection request wasn't possible counts as touches 1 and 2.
+    if (f.inmailFirst && stageAfter === "Request pending") step = Math.max(step, 2);
     return Math.max(step, STAGE_MIN_STEP[stageAfter] || 0);
   }
 
@@ -3455,8 +3468,15 @@
       direction: "Outbound", date: todayStr(), summary: nt ? "Touch " + nt.n + ": " + nt.name : "", moveStage: "", followUp: "",
       stageTouched: false, followTouched: false
     };
+    // LinkedIn wouldn't allow a connection request, so the first touch is an InMail: after it, the
+    // person is on the not-accepted (InMail) route with one last InMail a week later.
+    if (stage === "Not contacted" && isInmailDraft(messageDraft(l, c, 1))) {
+      Object.assign(activityForm, { type: "LinkedIn message", summary: "Touch 1: InMail (a connection request wasn't possible)",
+        moveStage: "Request pending", stageTouched: true, inmailFirst: true });
+    }
     applyFormDefaults(c);
   }
+  function isInmailDraft(d) { return !!(d && d.meta && d.meta.channel === "inmail"); }
 
   function submitActivity(id, cid) {
     var f = activityForm;
