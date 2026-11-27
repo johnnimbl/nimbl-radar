@@ -673,6 +673,12 @@ th.cl-col-last{white-space:nowrap;}
 .owner-badge{font-size:.66rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);border:1px dashed var(--ink-soft);border-radius:999px;padding:2px 8px;white-space:nowrap;}
 .owner-note{font-size:.78rem;line-height:1.45;color:var(--ink-soft);padding:8px 10px;border:1px dashed var(--muted);border-radius:8px;background:var(--paper);}
 
+/* Decision-maker qualification on a contact */
+.dm-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:.78rem;line-height:1.45;padding:8px 10px;border:1px dashed var(--muted);border-radius:8px;background:var(--paper);margin:6px 0;}
+.dm-row .dm-q{font-weight:700;color:var(--ink);}
+.dm-row .dm-sub{color:var(--ink-soft);flex:1 1 220px;}
+.dm-row.dm-yes{border:1px solid var(--good);}
+.dm-badge{font-weight:700;color:var(--good);}
 /* Deal progress */
 .ms{background:var(--surface);border:1px solid var(--ink);border-radius:12px;padding:12px 16px;}
 .ms-strip{display:flex;flex-wrap:wrap;gap:6px;}

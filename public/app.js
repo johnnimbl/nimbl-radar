@@ -823,6 +823,7 @@
           (readOnly ? "" : '<button class="btn btn-ghost btn-sm" type="button" data-action="remove-contact" data-id="' + l.id + '" data-cid="' + c.id + '" aria-label="Remove contact">✕</button>') +
         '</div>' +
         renderAgentFoundNote(l, c) +
+        (c.name ? renderDeciderRow(l, c) : "") +
         renderEmailFinder(l, c) +
         '<div class="ct-crm">' +
           (c.owner ? '<div class="owner-note">' + escapeHtml(c.owner) + ' looks after ' + escapeHtml((c.name || "this person").split(" ")[0]) +
@@ -1761,7 +1762,8 @@
         if (!lout || (lin && lin >= lout)) {
           add({ key: "reply-" + c.id, kind: "reply", lead: l, contact: c, owner: "you", score: 100 + prioBoost(l),
             action: "Answer " + who + "'s reply",
-            why: "They replied" + (lin ? " " + agoText(lin) : "") + ". Replies go cold fast, so answer while the conversation is warm.",
+            why: "They replied" + (lin ? " " + agoText(lin) : "") + ". Replies go cold fast, so answer while the conversation is warm." +
+              (confirmedDecider(l) ? "" : " Use it to qualify: \"" + QUALIFY_QUESTIONS[0] + "\""),
             badge: '<span class="due-badge due-overdue">Replied</span>', logLabel: "Log reply" });
           return;
         }
@@ -1853,6 +1855,24 @@
           why: "Talk to " + (mainName || "the client") + (main && main.owner ? " (through " + main.owner + ")" : "") + " about extending it, or line up the next person.",
           badge: '<span class="due-badge ' + (left <= 7 ? 'due-overdue' : 'due-soon') + '">' + (left >= 0 ? left + 'd left' : 'Ended') + '</span>', logLabel: "Log" });
       });
+    });
+
+    // 3c. In conversation but nobody confirmed as the one who decides: qualify before investing in
+    // profiles. Uses add(), so a pending reply to the same person (which carries the same hint) wins.
+    crmLeads().forEach(function (l) {
+      if (!leadsInView[l.id] || DEAD_STATUSES.indexOf(l.status) !== -1 || l.status === "Won") return;
+      if (confirmedDecider(l) || !inConversation(l)) return;
+      var talking = (l.contacts || []).filter(function (c) {
+        return !c.owner && (c.stage === "Replied" || c.stage === "Meeting booked" || (c.activities || []).some(function (a) { return a.direction === "Inbound" && a.type !== "Note"; }));
+      }).sort(function (x, y) { return (lastDir(y, "Inbound") || "").localeCompare(lastDir(x, "Inbound") || ""); });
+      var c = talking[0];
+      if (!c) return;
+      var who = c.name || "your contact";
+      add({ key: "qualify-" + l.id, kind: "qualify", lead: l, contact: c, owner: "you", score: 66 + prioBoost(l), qualify: true,
+        action: "Confirm who decides at " + l.company,
+        why: "You're talking to " + who + (c.title ? " (" + c.title + ")" : "") + ", but nobody is confirmed as the decision-maker yet. Ask: " +
+          QUALIFY_QUESTIONS.map(function (q) { return "\"" + q + "\""; }).join(" "),
+        badge: '<span class="due-badge due-soon">Qualify</span>', logLabel: "Log" });
     });
 
     // 4. Companies gone quiet: reach a second person
@@ -1971,6 +1991,9 @@
     if (!readOnly && m.contact && m.decide) {
       logBtn = '<button class="btn btn-sm btn-primary" type="button" data-action="req-accepted" data-id="' + m.lead.id + '" data-cid="' + m.contact.id + '">They accepted</button>' +
         '<button class="btn btn-sm" type="button" data-action="req-pending" data-id="' + m.lead.id + '" data-cid="' + m.contact.id + '">Still pending</button>';
+    } else if (!readOnly && m.contact && m.qualify) {
+      logBtn = '<button class="btn btn-sm btn-primary" type="button" data-action="dm-set" data-id="' + m.lead.id + '" data-cid="' + m.contact.id + '">' + escapeHtml((m.contact.name || "They").split(" ")[0]) + ' decides</button>' +
+        '<button class="btn btn-sm" type="button" data-action="crm-log" data-id="' + m.lead.id + '" data-cid="' + m.contact.id + '">Log</button>';
     } else if (!readOnly && m.contact) {
       logBtn = '<button class="btn btn-sm' + (hasPanel ? '' : ' btn-primary') + '" type="button" data-action="crm-log" data-id="' + m.lead.id + '" data-cid="' + m.contact.id + '">' + (t ? 'Log touch ' + t.n : m.logLabel || 'Log') + '</button>';
     }
@@ -2697,11 +2720,22 @@
     var min = CANDIDATE_STAGES.indexOf(stage);
     return (l.candidates || []).some(function (c) { return CANDIDATE_STAGES.indexOf(c.stage) >= min; });
   }
+  // Who has been confirmed as the person who decides (clientInfo.decisionMaker = { cid, date }),
+  // if they're still on file. A title alone never confirms it: it's asked in conversation.
+  function confirmedDecider(l) {
+    var dm = l.clientInfo && l.clientInfo.decisionMaker;
+    return dm && dm.cid ? findContact(l, dm.cid) || null : null;
+  }
+  function inConversation(l) {
+    return (l.contacts || []).some(function (c) { return c.stage === "Replied" || c.stage === "Meeting booked" || (c.activities || []).some(function (a) { return a.direction === "Inbound" && a.type !== "Note"; }); });
+  }
   var MILESTONES = [
-    { k: "dm", label: "Decision-maker found", how: "a first contact or a senior title on file",
-      auto: function (l) { return (l.contacts || []).some(function (c) { return c.isPrimary || titleScore(c.title) >= 3; }); } },
+    { k: "contact", label: "Contact found", how: "someone is on file to approach",
+      auto: function (l) { return (l.contacts || []).some(function (c) { return !!c.name; }); } },
     { k: "talk", label: "In conversation", how: "someone replied",
-      auto: function (l) { return (l.contacts || []).some(function (c) { return c.stage === "Replied" || c.stage === "Meeting booked" || (c.activities || []).some(function (a) { return a.direction === "Inbound" && a.type !== "Note"; }); }); } },
+      auto: inConversation },
+    { k: "dm", label: "Decision-maker confirmed", how: "a contact is marked as the one who decides",
+      auto: function (l) { return !!confirmedDecider(l); } },
     { k: "need", label: "Need confirmed", how: "", auto: null },
     { k: "call", label: "Intro call held", how: "a meeting or call is logged",
       auto: function (l) { return (l.contacts || []).some(function (c) { return c.stage === "Meeting booked" || (c.activities || []).some(function (a) { return a.type === "Meeting" || a.type === "Call"; }); }); } },
@@ -2740,6 +2774,38 @@
     persist();
   }
   function emptyClientInfoLocal() { return { address: "", phone: "", taxId: "", currency: "USD", linkedin: "" }; }
+
+  // Marks (or unmarks) a contact as the person who decides on bringing in outside talent.
+  function setDecider(id, cid) {
+    var l = findLead(id);
+    if (!l || !findContact(l, cid)) return;
+    l.clientInfo = l.clientInfo || emptyClientInfoLocal();
+    var cur = l.clientInfo.decisionMaker;
+    if (cur && cur.cid === cid) delete l.clientInfo.decisionMaker;
+    else l.clientInfo.decisionMaker = { cid: cid, date: todayStr() };
+    persist();
+  }
+
+  // What to ask so a conversation tells you whether this person decides.
+  var QUALIFY_QUESTIONS = [
+    "When you bring in outside Salesforce people, who signs off on it?",
+    "Who else would want a say before we share profiles?",
+    "Is there budget for these roles now, or does it need approving?"
+  ];
+  function renderDeciderRow(l, c) {
+    var dm = confirmedDecider(l);
+    var first = (c.name || "this person").split(" ")[0];
+    if (dm && dm.id === c.id) {
+      return '<div class="dm-row dm-yes"><span class="dm-badge">✓ Confirmed decision-maker</span>' +
+        '<span class="dm-sub">since ' + fmtDate(l.clientInfo.decisionMaker.date) + '</span>' +
+        (readOnly ? '' : '<button type="button" class="btn-link" data-action="dm-set" data-id="' + l.id + '" data-cid="' + c.id + '">Undo</button>') + '</div>';
+    }
+    if (dm) return "";
+    if (!c.isPrimary && firstContact(l) !== c) return "";
+    return '<div class="dm-row"><span class="dm-q">Decision-maker? Not confirmed yet.</span>' +
+      '<span class="dm-sub">A title is only a guess. Ask in conversation: "' + escapeHtml(QUALIFY_QUESTIONS[0]) + '"</span>' +
+      (readOnly ? '' : '<button type="button" class="btn btn-sm" data-action="dm-set" data-id="' + l.id + '" data-cid="' + c.id + '">' + escapeHtml(first) + ' decides</button>') + '</div>';
+  }
 
   /* ---------------- Client account (Won companies) ---------------- */
 
@@ -3863,6 +3929,7 @@
     if (action === "set-view") { setView(t.getAttribute("data-view")); render(); return; }
     if (action === "crm-log") { openActivityForm(id, cid); render(); return; }
     if (action === "ms-toggle") { toggleMilestone(id, t.getAttribute("data-key")); return; }
+    if (action === "dm-set") { setDecider(id, cid); return; }
     if (action === "tpl-use") {
       var tp = playbook.filter(function (p) { return p.id === t.getAttribute("data-tid"); })[0];
       if (tp) { draftEdits[t.getAttribute("data-did")] = tp.body; render(); toast("Template copied into the draft box. Fill in the details before sending."); }
