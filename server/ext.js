@@ -5,7 +5,8 @@
 // so an open Radar tab picks the change up instead of overwriting it.
 const crypto = require("crypto");
 
-const CADENCE_DAYS = { "Connection sent": 4, "Connected": 2, "Message sent": 5, "Replied": 2 };
+// "Request pending": after an InMail to someone who never accepted, the last InMail is a week later.
+const CADENCE_DAYS = { "Connection sent": 4, "Request pending": 7, "Connected": 2, "Message sent": 5, "Replied": 2 };
 const STAGE_RANK = { "Not contacted": 0, "No response": 0, "Connection sent": 1, "Request pending": 1.5, "Connected": 2, "Message sent": 3, "Replied": 4, "Meeting booked": 5, "Not interested": 99 };
 const STATUS_ORDER = ["Not Started", "Researching", "Contacted", "Replied", "Meeting Booked", "Proposal Sent", "Won"];
 const STAGE_TO_STATUS = { "Connection sent": "Contacted", "Connected": "Contacted", "Message sent": "Contacted", "Replied": "Replied", "Meeting booked": "Meeting Booked" };
@@ -256,6 +257,10 @@ async function logActivity(pool, b) {
       await client.query(
         "update agent_drafts set used_at = now() where contact_id = $1 and used_at is null and dismissed_at is null and kind <> 'contact' and (touch <= $2 or kind = 'reengage')",
         [c.id, what === "reply" ? 99 : step]);
+      // Getting back in touch answers the company's new-role alerts, as logging in the app does.
+      if (direction === "Outbound") {
+        await client.query("update role_alerts set seen_at = now() where lead_id = $1 and seen_at is null and closed_at is null", [c.lead_id]);
+      }
       const lead = (await client.query("select status from leads where id = $1", [c.lead_id])).rows[0];
       const target = STAGE_TO_STATUS[stage];
       const auto = ["Not Started", "Researching", "Contacted", "Replied", "Meeting Booked"];
